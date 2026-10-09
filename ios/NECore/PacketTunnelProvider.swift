@@ -19,19 +19,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     completionHandler: @escaping (Error?) -> Void
   ) {
     logger.info("startTunnel begin")
+    let flight = FlightRecorder.shared
+    flight.record("startTunnel begin mem=\(Self.availableMemoryMB())MB")
     NECoreBridge.neReport("startTunnel begin")
     startMemoryProbe()
     startResourceHeartbeat()
     sharedStateStore.clearRunTime()
     sharedStateStore.attachLaunchPayload(options)
-    reloadControlWidget()
+    flight.record(
+      "payload \(sharedStateStore.launchPayloadAvailable() ? "attached" : "absent")"
+    )
+    // Defused: ControlCenter.reloadControls performs XPC to a remote
+    // service and has been implicated in early NE process teardown on
+    // sideloaded builds. The widget refresh is cosmetic; skip it during
+    // startup and let the app-side refresh cover it.
+    // reloadControlWidget()
+    flight.record("preparing core runtime")
     prepareCoreRuntime()
+    flight.record("core runtime ready")
     guard let snapshot = sharedStateStore.loadVPNOptionsSnapshot() else {
+      flight.record("FATAL: vpn options missing (payload+defaults)")
+      flight.dumpForSystemLog(logger)
       logger.error("startTunnel failed: missing vpn options")
       completionHandler(PacketTunnelProviderError.missingVPNOptions)
       return
     }
     let vpnOptions = snapshot.options
+    flight.record("options decoded stack=\(vpnOptions.stack) mtu=\(vpnOptions.mtu)")
     logger.info(
       "startTunnel options stack=\(vpnOptions.stack, privacy: .public) ipv6=\(vpnOptions.ipv6, privacy: .public) captureDns=\(vpnOptions.captureDns, privacy: .public) systemProxy=\(vpnOptions.systemProxy, privacy: .public)"
     )
@@ -40,16 +54,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       networkConfiguration.makeSettings(for: vpnOptions)
     ) { error in
       if let error {
+        flight.record("FATAL: settings error \(error)")
+        flight.dumpForSystemLog(self.logger)
         self.logger.error(
           "setTunnelNetworkSettings failed: \(error.localizedDescription, privacy: .public)"
         )
         completionHandler(error)
         return
       }
+      flight.record("settings applied")
       self.logger.info("setTunnelNetworkSettings completed")
       guard let tunnelFileDescriptor =
         self.networkConfiguration.tunnelFileDescriptor()
       else {
+        flight.record("FATAL: tunnel fd not found")
+        flight.dumpForSystemLog(self.logger)
         self.logger.error(
           "startTunnel failed: tunnel file descriptor missing"
         )
@@ -64,6 +83,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.eventQueue.start()
       let initParams = self.sharedStateStore.makeInitParams()
       let setupParams = self.sharedStateStore.loadSetupParams()
+      flight.record("quickSetup init=\(initParams) setupBytes=\(setupParams.count)")
       self.logger.info(
         "quickSetup initParams=\(initParams, privacy: .public)"
       )
@@ -76,12 +96,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         {
           let message = String(data: result, encoding: .utf8) ??
             "unknown core error"
+          flight.record("FATAL: quickSetup \(message)")
+          flight.dumpForSystemLog(self.logger)
           self.logger.error(
             "quickSetup failed: \(message, privacy: .public)"
           )
           completionHandler(PacketTunnelProviderError.couldNotStartCoreTun)
           return
         }
+        flight.record("quickSetup completed")
         self.logger.info("quickSetup completed")
         let coreTunOptions = CoreTunOptions(
           stack: vpnOptions.stack,
@@ -103,6 +126,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
           withFileDescriptor: tunnelFileDescriptor,
           options: coreTunOptionsData
         )
+        flight.record("startTun=\(started) opts=\(String(data: coreTunOptionsData, encoding: .utf8) ?? "?")")
+        if !started {
+          flight.dumpForSystemLog(self.logger)
+        }
         self.logger.info(
           "NECoreBridge.startTun result=\(started, privacy: .public)"
         )
@@ -110,6 +137,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if started {
           self.sharedStateStore.saveRunTime(vpnOptions: snapshot.data)
         }
+        flight.record(
+          started ? "TUNNEL STARTED" : "FATAL: startTun returned false"
+        )
         completionHandler(
           started ? nil : PacketTunnelProviderError.couldNotStartCoreTun
         )
@@ -283,10 +313,13 @@ extension PacketTunnelProvider {
   /// failures are logged and never block tunnel startup.
   func prepareCoreRuntime() {
     let store = sharedStateStore
+    let flight = FlightRecorder.shared
     guard let home = store.homeDirectoryForCore() else {
+      flight.record("FATAL: no core home dir")
       logger.error("prepareCoreRuntime: no home directory available")
       return
     }
+    flight.record("home=\(home.path) appGroup=\(store.usesAppGroupHome())")
     let fileManager = FileManager.default
     if !fileManager.fileExists(atPath: home.path) {
       try? fileManager.createDirectory(
@@ -297,23 +330,28 @@ extension PacketTunnelProvider {
       let destination = home.appendingPathComponent("config.yaml")
       do {
         try configYaml.write(to: destination, options: .atomic)
+        flight.record("config.yaml written bytes=\(configYaml.count)")
         logger.info(
           "prepareCoreRuntime: wrote config.yaml bytes=\(configYaml.count)"
         )
       } catch {
+        flight.record("config.yaml write failed: \(error)")
         logger.error(
           "prepareCoreRuntime: config.yaml write failed: \(error.localizedDescription, privacy: .public)"
         )
       }
     } else if !store.usesAppGroupHome() {
+      flight.record("no config.yaml payload, no shared container")
       logger.warning(
         "prepareCoreRuntime: no config.yaml payload and no shared container"
       )
     }
     let downloads = store.missingGeoDataDownloads()
     guard !downloads.isEmpty else {
+      flight.record("geo complete, no downloads")
       return
     }
+    flight.record("geo fetching \(downloads.count)")
     logger.info(
       "prepareCoreRuntime: fetching \(downloads.count) geo resources"
     )
@@ -347,6 +385,7 @@ extension PacketTunnelProvider {
     // NE startTunnel is watchdog-bound; cap the wait well below the
     // ~30s kill budget. Missing geo files degrade gracefully.
     _ = semaphore.wait(timeout: .now() + 25)
+    flight.record("geo wait done (timeout or complete)")
     session.finishTasksAndInvalidate()
   }
 }

@@ -54,6 +54,10 @@ final class PacketTunnelSharedStateStore {
     return (options, data)
   }
 
+  func launchPayloadAvailable() -> Bool {
+    launchPayload != nil
+  }
+
   func loadSetupParams() -> Data {
     if let payload = launchPayload,
       let raw = payload["setupParams"],
