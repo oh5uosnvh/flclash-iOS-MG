@@ -21,12 +21,13 @@ final class SharedStateStore {
   }
 
   func saveSharedState(_ data: Data) -> Bool {
-    guard let userDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
-      return false
-    }
-    let previousControlDisplayState = controlDisplayState(
-      from: userDefaults.data(forKey: sharedStateKey)
-    )
+    // A private copy is required when signing did not grant the expected
+    // App Group. Group defaults alone are not a cross-process fallback.
+    let privateDefaults = UserDefaults.standard
+    let groupDefaults = appGroupIsUsable()
+      ? UserDefaults(suiteName: appGroupIdentifier) : nil
+    let previousControlDisplayState = controlDisplayState(from: savedSharedState())
+    let stores = [privateDefaults] + (groupDefaults.map { [$0] } ?? [])
     if let json = try? JSONSerialization.jsonObject(with: data)
       as? [String: Any],
       let setupParams = json[setupParamsKey],
@@ -34,10 +35,14 @@ final class SharedStateStore {
       JSONSerialization.isValidJSONObject(setupParams),
       let setupData = try? JSONSerialization.data(withJSONObject: setupParams)
     {
-      userDefaults.set(setupData, forKey: setupParamsKey)
+      for store in stores {
+        store.set(setupData, forKey: setupParamsKey)
+      }
     }
-    userDefaults.set(data, forKey: sharedStateKey)
-    userDefaults.synchronize()
+    for store in stores {
+      store.set(data, forKey: sharedStateKey)
+      store.synchronize()
+    }
     if previousControlDisplayState != controlDisplayState(from: data),
       #available(iOS 18.0, *)
     {
@@ -63,9 +68,16 @@ final class SharedStateStore {
     )
   }
 
+  private func savedSharedState() -> Data? {
+    if let data = UserDefaults.standard.data(forKey: sharedStateKey) {
+      return data
+    }
+    guard appGroupIsUsable() else { return nil }
+    return UserDefaults(suiteName: appGroupIdentifier)?.data(forKey: sharedStateKey)
+  }
+
   func loadTunnelConfiguration() -> TunnelConfiguration {
-    guard let userDefaults = UserDefaults(suiteName: appGroupIdentifier),
-      let data = userDefaults.data(forKey: sharedStateKey),
+    guard let data = savedSharedState(),
       let sharedState = try? JSONDecoder().decode(
         SharedStatePayload.self,
         from: data
@@ -151,8 +163,7 @@ final class SharedStateStore {
 
   func makeLaunchPayload() -> [String: Any]? {
     guard
-      let sharedData = UserDefaults(suiteName: appGroupIdentifier)?
-        .data(forKey: sharedStateKey),
+      let sharedData = savedSharedState(),
       let shared = try? JSONSerialization.jsonObject(with: sharedData)
         as? [String: Any]
     else {

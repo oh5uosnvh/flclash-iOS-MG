@@ -21,7 +21,8 @@ final class TunnelController {
     onTunnelStateChanged: @escaping (TunnelTarget) -> Void,
     onConnectionStateChanged: @escaping (String) -> Void,
     onExternalStart: @escaping () -> Void,
-    onExternalStop: @escaping () -> Void
+    onExternalStop: @escaping () -> Void,
+    onDiagnostic: @escaping (String) -> Void = { _ in }
   ) {
     let networkExtensionIdentifier =
       "\(Bundle.main.bundleIdentifier!).NECore"
@@ -37,7 +38,8 @@ final class TunnelController {
       onTunnelStateChanged: onTunnelStateChanged,
       onConnectionStateChanged: onConnectionStateChanged,
       onExternalStart: onExternalStart,
-      onExternalStop: onExternalStop
+      onExternalStop: onExternalStop,
+      onDiagnostic: onDiagnostic
     )
   }
 

@@ -25,14 +25,31 @@ final class PacketTunnelSharedStateStore {
   // signing environments).
   private var launchPayload: [String: Any]?
 
-  func attachLaunchPayload(_ options: [String: NSObject]?) {
-    guard
-      let payload = options?["launchPayload"] as? [String: Any],
-      (payload["launchPayloadVersion"] as? Int) == 1
-    else {
+  func attachLaunchPayload(
+    _ options: [String: NSObject]?,
+    providerConfiguration: [String: Any]? = nil
+  ) {
+    // App starts pass a flat dictionary. Older builds used an envelope;
+    // Settings/On Demand starts may pass no options at all.
+    launchPayload = nil
+    let candidates: [[String: Any]?] = [
+      options?["launchPayload"] as? [String: Any],
+      options?.mapValues { $0 as Any },
+      providerConfiguration?["launchPayload"] as? [String: Any],
+      providerConfiguration,
+    ]
+    for candidate in candidates {
+      guard let payload = candidate,
+        (payload["launchPayloadVersion"] as? Int) == 1,
+        let rawOptions = payload["vpnOptions"] as? [String: Any],
+        let data = try? JSONSerialization.data(withJSONObject: rawOptions),
+        (try? JSONDecoder().decode(PacketTunnelVPNOptions.self, from: data)) != nil
+      else {
+        continue
+      }
+      launchPayload = payload
       return
     }
-    launchPayload = payload
   }
 
   func loadVPNOptionsSnapshot() -> (options: PacketTunnelVPNOptions, data: Data)? {

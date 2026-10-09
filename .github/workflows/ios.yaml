@@ -53,6 +53,9 @@ jobs:
           }
           echo 'vendored private kernel + viewTurbo verified'
 
+      - name: Reproduce and verify iOS launch payload regression
+        run: sh tool/ios/test_launch_payload.sh
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:

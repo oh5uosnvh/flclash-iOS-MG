@@ -72,6 +72,21 @@ final class ServiceChannel {
           "running": false,
           "startTime": 0,
         ])
+      },
+      onDiagnostic: { message in
+        // The main app can report OS launch failures even when the
+        // extension never starts or has no shared container.
+        let event: [String: Any] = [
+          "method": "message",
+          "arguments": [
+            "type": "log",
+            "data": ["LogLevel": "info", "Payload": "[VPN-DIAG] \(message)"],
+          ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: event),
+          let text = String(data: data, encoding: .utf8)
+        else { return }
+        channel.invokeMethod("event", arguments: text)
       }
     )
     let coreMessageRouter = CoreMessageRouter(

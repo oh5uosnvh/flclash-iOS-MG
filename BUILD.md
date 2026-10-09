@@ -148,29 +148,19 @@ unsigned IPA 的三种安装路径：
 
 直接用 TrollStore 打开 IPA 安装，无需签名。NE 权限完整保留（entitlements 在包内）。
 
-### 5.2 SideStore / AltStore（7 天签）
+### 5.2 Apple ID 侧载
 
-1. AltServer/SideServer 连接 iPhone
-2. 侧载 IPA（需要 Apple ID + App-specific password）
-3. 首次安装后需在 设置 → 通用 → VPN与设备管理 信任开发者证书
-4. **NE 完整权限注意**：免费 Apple ID 签的 Network Extension 需要 SideStore 开启"JIT/增强"或使用付费开发者账号，否则 NE 无法启动
+安装和信任主 App 不等于 Packet Tunnel 扩展获准运行。以**重签后的每个组件**的实际签名和 provisioning profile 为准：主 App、NECore、Widget 必须分别匹配自己的 App ID/Team，Network Extension 需要 profile 允许 `packet-tunnel-provider`。免费/个人团队未获准的 capability 不能通过 JIT、写 plist 或本项目源码补齐。
 
-### 5.3 开发者证书签（推荐，长期有效）
+### 5.3 开发者证书签
 
-```bash
-# 用 codesign 重签（需替换 provisioning profile 与证书名）
-unzip FlClash-*-unsigned.ipa -d payload
-codesign -f -s "Apple Development: <cert>" \
-  --entitlements ios/Runner/Runner.entitlements \
-  payload/Payload/Runner.app
-codesign -f -s "Apple Development: <cert>" \
-  --entitlements ios/NECore/NECore.entitlements \
-  payload/Payload/Runner.app/PlugIns/NECore.appex
-# 重打包
-cd payload && zip -r ../FlClash-signed.ipa Payload
-```
+使用具备所需 capabilities 的签名服务/开发者团队，逐个生成匹配的描述文件并正确重签。不要把模板里的 `$(APP_BUNDLE_ID)` 或分发包的 `UNKNOWN000` 当成已生效授权。
 
-> 重签时 bundle id 必须与 provisioning profile 匹配，NE 的 app group 也要同步改。
+- 由内向外重签：嵌入框架/dylib → NECore/Widget → 主 App；最后验证完整签名。
+- 主 App 与每个 `.appex` 分别嵌入自己的 `embedded.mobileprovision`，不能复用主 App 的 profile 给扩展。
+- 保持 Team、主 App/扩展 Bundle ID、签名 entitlements 和 profile 中的允许值一致。若使用 App Groups，各组件必须有同一个**真实获准**的 group。
+- 本项目支持 App Group 不可用时通过 `providerConfiguration` 传递启动载荷，但这不替代系统对 Network Extension entitlement 的检查。
+- 覆盖安装还要求重签后的 App ID/Team 与已安装版本匹配，不只有构建模板 Bundle ID 相同。先备份配置，不把卸载作为首个排障步骤。
 
 ---
 
@@ -236,8 +226,11 @@ A: 大概率是 lib.go 的 cgo 分支（`(android||ios)&&cgo`）问题——本�
 **Q: 本地构建 Rust 报错？**
 A: `plugins/rust_api` 需要 Rust 工具链：`rustup update stable`。
 
-**Q: 实机 NE 启动后立刻被杀？**
-A: 看日志最后一条 `[MEM] footprint=`。若 >40MB，确认安装的是带 `with_low_memory` 标签的构建（6.3 节校验第 3 项有输出）。
+**Q: 实机 NE 启动后立刻断开？**
+A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统可能在扩展入口前拒绝启动；VPN 列表有条目不能排除签名问题。若有 NE 的 footprint 记录，再结合 JetsamEvent/崩溃日志判断内存，不以 Linux RSS/Private_Dirty 代替 iOS phys_footprint。
+
+**Q: 本轮载荷修复覆盖什么？**
+A: 平铺启动字典、旧版嵌套 `launchPayload`、无 options 的系统/On Demand 启动、非法载荷回退，以及主 App 私有状态副本。`sh tool/ios/test_launch_payload.sh` 在 macOS 编译真实源码，先证明旧版失败，再验证新版。系统签名放行、首次 Geo 资源下载、无 App Group 的长期日志/运行状态同步仍需真机验证；不能把 CI 构建成功说成 iOS 自签实测通过。
 
 **Q: 测速后 memory pressure 连环出现？**
 A: 属正常防御路径：`memory_pressure_critical` → `memory_pressure_reclaimed` 成对出现且 footprint 回落即可；若只 critical 不 reclaimed 才是问题。

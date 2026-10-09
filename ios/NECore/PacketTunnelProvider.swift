@@ -6,6 +6,9 @@ import os
 final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let sharedStateStore = PacketTunnelSharedStateStore()
   private let networkConfiguration = PacketTunnelNetworkConfiguration()
+  private let startupLock = NSLock()
+  private var startupCancelled = false
+  private var preparationSession: URLSession?
   private lazy var eventQueue = NECoreEventQueue(
     sharedStateStore: sharedStateStore
   )
@@ -19,13 +22,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     completionHandler: @escaping (Error?) -> Void
   ) {
     logger.info("startTunnel begin")
+    startupLock.lock()
+    startupCancelled = false
+    startupLock.unlock()
     let flight = FlightRecorder.shared
     flight.record("startTunnel begin mem=\(Self.availableMemoryMB())MB")
     NECoreBridge.neReport("startTunnel begin")
     startMemoryProbe()
     startResourceHeartbeat()
     sharedStateStore.clearRunTime()
-    sharedStateStore.attachLaunchPayload(options)
+    sharedStateStore.attachLaunchPayload(
+      options,
+      providerConfiguration: (protocolConfiguration as? NETunnelProviderProtocol)?
+        .providerConfiguration
+    )
     flight.record(
       "payload \(sharedStateStore.launchPayloadAvailable() ? "attached" : "absent")"
     )
@@ -35,7 +45,29 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     // startup and let the app-side refresh cover it.
     // reloadControlWidget()
     flight.record("preparing core runtime")
-    prepareCoreRuntime()
+    prepareCoreRuntime { [weak self] error in
+      guard let self else { return }
+      self.startupLock.lock()
+      let cancelled = self.startupCancelled
+      self.startupLock.unlock()
+      if cancelled {
+        completionHandler(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        return
+      }
+      if let error {
+        self.stopMemoryProbe()
+        self.stopResourceHeartbeat()
+        flight.record("FATAL: runtime preparation \(error.localizedDescription)")
+        flight.dumpForSystemLog(self.logger)
+        completionHandler(error)
+        return
+      }
+      self.startPreparedTunnel(completionHandler: completionHandler)
+    }
+  }
+
+  private func startPreparedTunnel(completionHandler: @escaping (Error?) -> Void) {
+    let flight = FlightRecorder.shared
     flight.record("core runtime ready")
     guard let snapshot = sharedStateStore.loadVPNOptionsSnapshot() else {
       flight.record("FATAL: vpn options missing (payload+defaults)")
@@ -162,6 +194,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     with reason: NEProviderStopReason,
     completionHandler: @escaping () -> Void
   ) {
+    startupLock.lock()
+    startupCancelled = true
+    let session = preparationSession
+    preparationSession = nil
+    startupLock.unlock()
+    session?.invalidateAndCancel()
     logger.info("stopTunnel reason=\(reason.rawValue, privacy: .public)")
     NECoreBridge.neReport(String(format: "stopTunnel reason=%d availableMem=%dMB footprint=%.2fMB", reason.rawValue, Self.availableMemoryMB(), Self.footprintMB()))
     stopMemoryProbe()
@@ -308,85 +346,101 @@ private enum PacketTunnelProviderError: LocalizedError {
 // MARK: - Runtime home preparation
 
 extension PacketTunnelProvider {
-  /// Writes the profile config and fetches missing geo resources into the
-  /// core home directory before the core initializes. Best effort: network
-  /// failures are logged and never block tunnel startup.
-  func prepareCoreRuntime() {
+  /// Prepare on disk before starting Go. Low-memory geodata initialization
+  /// does not download missing databases; MMDB access can terminate the core.
+  /// URLSession download tasks avoid retaining whole databases in NE memory.
+  func prepareCoreRuntime(completionHandler: @escaping (Error?) -> Void) {
     let store = sharedStateStore
     let flight = FlightRecorder.shared
     guard let home = store.homeDirectoryForCore() else {
-      flight.record("FATAL: no core home dir")
-      logger.error("prepareCoreRuntime: no home directory available")
+      completionHandler(NSError(domain: "FlClash.Startup", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "No core home: launch payload and App Group unavailable"]))
       return
     }
     flight.record("home=\(home.path) appGroup=\(store.usesAppGroupHome())")
-    let fileManager = FileManager.default
-    if !fileManager.fileExists(atPath: home.path) {
-      try? fileManager.createDirectory(
-        at: home, withIntermediateDirectories: true
-      )
-    }
-    if let configYaml = store.configYamlDataFromPayload() {
-      let destination = home.appendingPathComponent("config.yaml")
-      do {
-        try configYaml.write(to: destination, options: .atomic)
-        flight.record("config.yaml written bytes=\(configYaml.count)")
-        logger.info(
-          "prepareCoreRuntime: wrote config.yaml bytes=\(configYaml.count)"
-        )
-      } catch {
-        flight.record("config.yaml write failed: \(error)")
-        logger.error(
-          "prepareCoreRuntime: config.yaml write failed: \(error.localizedDescription, privacy: .public)"
-        )
+    do {
+      try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+      if let data = store.configYamlDataFromPayload() {
+        try data.write(to: home.appendingPathComponent("config.yaml"), options: .atomic)
+        flight.record("config.yaml written bytes=\(data.count)")
+      } else if !FileManager.default.fileExists(atPath: home.appendingPathComponent("config.yaml").path) {
+        throw NSError(domain: "FlClash.Startup", code: 2,
+          userInfo: [NSLocalizedDescriptionKey: "No config.yaml in launch payload or core home"])
       }
-    } else if !store.usesAppGroupHome() {
-      flight.record("no config.yaml payload, no shared container")
-      logger.warning(
-        "prepareCoreRuntime: no config.yaml payload and no shared container"
-      )
+    } catch {
+      completionHandler(error)
+      return
     }
     let downloads = store.missingGeoDataDownloads()
     guard !downloads.isEmpty else {
       flight.record("geo complete, no downloads")
+      completionHandler(nil)
       return
     }
-    flight.record("geo fetching \(downloads.count)")
-    logger.info(
-      "prepareCoreRuntime: fetching \(downloads.count) geo resources"
-    )
-    let semaphore = DispatchSemaphore(value: 0)
+    flight.record("geo fetching to disk count=\(downloads.count)")
     let group = DispatchGroup()
-    let session = URLSession(configuration: .ephemeral)
+    let errors = RuntimePreparationErrors()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 15
+    configuration.timeoutIntervalForResource = 20
+    let session = URLSession(configuration: configuration)
+    startupLock.lock()
+    preparationSession = session
+    let cancelled = startupCancelled
+    startupLock.unlock()
+    if cancelled {
+      session.invalidateAndCancel()
+      completionHandler(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+      return
+    }
     for item in downloads {
       group.enter()
-      var request = URLRequest(url: item.remoteURL)
-      request.timeoutInterval = 15
-      let task = session.dataTask(with: request) {
-        [weak self] data, _, error in
+      session.downloadTask(with: item.remoteURL) { temporaryURL, response, error in
         defer { group.leave() }
-        if let error {
-          self?.logger.error(
-            "prepareCoreRuntime: \(item.destination.lastPathComponent, privacy: .public) download failed: \(error.localizedDescription, privacy: .public)"
-          )
-          return
+        do {
+          if let error { throw error }
+          guard let temporaryURL,
+            let http = response as? HTTPURLResponse,
+            (200...299).contains(http.statusCode),
+            !(http.mimeType?.lowercased().contains("text/html") ?? false),
+            let size = try temporaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+            size > 0
+          else {
+            throw NSError(domain: "FlClash.Startup", code: 3,
+              userInfo: [NSLocalizedDescriptionKey: "Invalid download for \(item.destination.lastPathComponent), HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"])
+          }
+          try FileManager.default.moveItem(at: temporaryURL, to: item.destination)
+          flight.record("geo stored \(item.destination.lastPathComponent) bytes=\(size)")
+        } catch {
+          errors.record(error)
+          flight.record("geo failed \(item.destination.lastPathComponent): \(error.localizedDescription)")
         }
-        guard let data, !data.isEmpty else {
-          return
-        }
-        try? data.write(to: item.destination, options: .atomic)
-        self?.logger.info(
-          "prepareCoreRuntime: stored \(item.destination.lastPathComponent, privacy: .public) bytes=\(data.count)"
-        )
-      }
-      task.resume()
+      }.resume()
     }
-    group.notify(queue: .global()) { semaphore.signal() }
-    // NE startTunnel is watchdog-bound; cap the wait well below the
-    // ~30s kill budget. Missing geo files degrade gracefully.
-    _ = semaphore.wait(timeout: .now() + 25)
-    flight.record("geo wait done (timeout or complete)")
-    session.finishTasksAndInvalidate()
+    group.notify(queue: .global()) {
+      session.finishTasksAndInvalidate()
+      self.startupLock.lock()
+      self.preparationSession = nil
+      self.startupLock.unlock()
+      completionHandler(errors.first)
+    }
+  }
+}
+
+private final class RuntimePreparationErrors: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Error?
+
+  func record(_ error: Error) {
+    lock.lock()
+    defer { lock.unlock() }
+    if stored == nil { stored = error }
+  }
+
+  var first: Error? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
   }
 }
 

@@ -9,6 +9,7 @@ final class TunnelCoordinator {
   private let onConnectionStateChanged: (String) -> Void
   private let onExternalStart: () -> Void
   private let onExternalStop: () -> Void
+  private let onDiagnostic: (String) -> Void
   private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "cc.flclash.mg",
     category: "TunnelCoordinator"
@@ -32,13 +33,15 @@ final class TunnelCoordinator {
     onTunnelStateChanged: @escaping (TunnelTarget) -> Void,
     onConnectionStateChanged: @escaping (String) -> Void,
     onExternalStart: @escaping () -> Void,
-    onExternalStop: @escaping () -> Void
+    onExternalStop: @escaping () -> Void,
+    onDiagnostic: @escaping (String) -> Void = { _ in }
   ) {
     self.managerStore = managerStore
     self.onTunnelStateChanged = onTunnelStateChanged
     self.onConnectionStateChanged = onConnectionStateChanged
     self.onExternalStart = onExternalStart
     self.onExternalStop = onExternalStop
+    self.onDiagnostic = onDiagnostic
   }
 
   func submitTunnelRequest(
@@ -116,6 +119,11 @@ final class TunnelCoordinator {
       return
     }
 
+    if connection.status == .disconnected,
+      observedTunnelStatus != .disconnected
+    {
+      reportDisconnectError(connection)
+    }
     if let wait = tunnelWait,
       wait.manager.connection === connection
     {
@@ -207,6 +215,7 @@ final class TunnelCoordinator {
         log(
           "\(request.target.description) failed: \(error.localizedDescription)"
         )
+        log("request error \(Self.errorSummary(error))")
         finishTunnelRequest(
           request,
           actualState: stableFailureState(status)
@@ -295,8 +304,15 @@ final class TunnelCoordinator {
       }
 
       do {
-        let payload = (manager.protocolConfiguration as? NETunnelProviderProtocol)?
-          .providerConfiguration as? [String: NSObject]
+        let proto = manager.protocolConfiguration as? NETunnelProviderProtocol
+        let payload = proto?.providerConfiguration as? [String: NSObject]
+        let bundle = Bundle.main.bundleIdentifier ?? "unknown"
+        let group = "group.\(bundle)"
+        let hasGroup = FileManager.default.containerURL(
+          forSecurityApplicationGroupIdentifier: group
+        ) != nil
+        let yamlBytes = (payload?["configYaml"] as? String)?.utf8.count ?? 0
+        log("launch os=\(ProcessInfo.processInfo.operatingSystemVersionString) app=\(bundle) provider=\(proto?.providerBundleIdentifier ?? "nil") appGroup=\(hasGroup) payloadVersion=\(payload?["launchPayloadVersion"] ?? NSNull()) yamlBytes=\(yamlBytes)")
         try manager.connection.startVPNTunnel(options: payload)
         log("start requested")
       } catch {
@@ -665,7 +681,31 @@ final class TunnelCoordinator {
     }
   }
 
+  private func reportDisconnectError(_ connection: NEVPNConnection) {
+    guard #available(iOS 16.0, *) else {
+      log("lastDisconnectError unavailable before iOS 16")
+      return
+    }
+    connection.fetchLastDisconnectError { [weak self] error in
+      let summary = error.map { Self.errorSummary($0) }
+        ?? "none (does not prove signing or startup succeeded)"
+      Task { @MainActor [weak self] in
+        self?.log("lastDisconnectError \(summary)")
+      }
+    }
+  }
+
+  nonisolated private static func errorSummary(_ error: Error, depth: Int = 0) -> String {
+    let error = error as NSError
+    var text = "domain=\(error.domain) code=\(error.code) description=\(error.localizedDescription)"
+    if depth < 2, let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error {
+      text += " underlying={\(errorSummary(underlying, depth: depth + 1))}"
+    }
+    return text
+  }
+
   private func log(_ message: String) {
     logger.debug("\(message, privacy: .public)")
+    onDiagnostic(message)
   }
 }
