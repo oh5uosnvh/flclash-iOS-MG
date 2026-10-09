@@ -19,7 +19,30 @@ final class PacketTunnelSharedStateStore {
   private let runTimeKey = "runTime"
   private let activeVpnOptionsKey = "activeVpnOptions"
 
+  // Launch payload injected from the provider configuration of the saved
+  // VPN profile. Present whenever the main app could build it; lets the
+  // extension start without a usable shared container (restricted
+  // signing environments).
+  private var launchPayload: [String: Any]?
+
+  func attachLaunchPayload(_ options: [String: NSObject]?) {
+    guard
+      let payload = options?["launchPayload"] as? [String: Any],
+      (payload["launchPayloadVersion"] as? Int) == 1
+    else {
+      return
+    }
+    launchPayload = payload
+  }
+
   func loadVPNOptionsSnapshot() -> (options: PacketTunnelVPNOptions, data: Data)? {
+    if let payload = launchPayload,
+      let rawOptions = payload["vpnOptions"] as? [String: Any],
+      let data = try? JSONSerialization.data(withJSONObject: rawOptions),
+      let options = try? JSONDecoder().decode(PacketTunnelVPNOptions.self, from: data)
+    {
+      return (options, data)
+    }
     guard let sharedData = userDefaults?.data(forKey: sharedStateKey),
       let shared = try? JSONSerialization.jsonObject(with: sharedData) as? [String: Any],
       let rawOptions = shared["vpnOptions"] as? [String: Any],
@@ -32,6 +55,14 @@ final class PacketTunnelSharedStateStore {
   }
 
   func loadSetupParams() -> Data {
+    if let payload = launchPayload,
+      let raw = payload["setupParams"],
+      !(raw is NSNull),
+      JSONSerialization.isValidJSONObject(raw),
+      let data = try? JSONSerialization.data(withJSONObject: raw)
+    {
+      return data
+    }
     guard let userDefaults else {
       return Self.emptySetupParams
     }
@@ -53,8 +84,26 @@ final class PacketTunnelSharedStateStore {
   }
 
   func makeInitParams() -> String {
-    let homeDirectory = appGroupDirectory()?.path ?? ""
+    let homeDirectory = homeDirectoryForCore()?.path ?? ""
     return "{\"home-dir\":\"\(homeDirectory)\",\"version\":0}"
+  }
+
+  // The shared container is the preferred home: the main app already
+  // populated it with the profile config and geo resources. When it is
+  // unavailable (restricted signing), the extension falls back to its own
+  // sandboxed home, which prepareRuntimeHomeIfNeeded() populates.
+  func usesAppGroupHome() -> Bool {
+    appGroupDirectory() != nil
+  }
+
+  func homeDirectoryForCore() -> URL? {
+    if usesAppGroupHome() {
+      return appGroupDirectory()
+    }
+    if launchPayload != nil {
+      return sandboxHomeDirectory()
+    }
+    return appGroupDirectory()
   }
 
   func appGroupDirectory() -> URL? {
@@ -62,6 +111,67 @@ final class PacketTunnelSharedStateStore {
       forSecurityApplicationGroupIdentifier:
         PacketTunnelEnvironment.appGroupIdentifier
     )
+  }
+
+  func sandboxHomeDirectory() -> URL? {
+    let fileManager = FileManager.default
+    guard
+      let base = fileManager.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      ).first
+    else {
+      return nil
+    }
+    let home = base.appendingPathComponent("CoreHome", isDirectory: true)
+    try? fileManager.createDirectory(
+      at: home, withIntermediateDirectories: true
+    )
+    return home
+  }
+
+  func configYamlDataFromPayload() -> Data? {
+    guard let payload = launchPayload,
+      let configYaml = payload["configYaml"] as? String,
+      !configYaml.isEmpty
+    else {
+      return nil
+    }
+    return Data(configYaml.utf8)
+  }
+
+  struct GeoDownloadItem {
+    let remoteURL: URL
+    let destination: URL
+  }
+
+  func missingGeoDataDownloads() -> [GeoDownloadItem] {
+    guard let payload = launchPayload,
+      let urls = payload["geoURLs"] as? [String: String],
+      let home = homeDirectoryForCore()
+    else {
+      return []
+    }
+    // GeoSite.dat / geoip.metadb / ASN.mmdb are the names the core
+    // resolves at startup (see constant/path.go).
+    let required: [(key: String, fileName: String)] = [
+      ("geosite", "GeoSite.dat"),
+      ("geoip", "geoip.metadb"),
+      ("asn", "ASN.mmdb"),
+    ]
+    let fileManager = FileManager.default
+    var items: [GeoDownloadItem] = []
+    for entry in required {
+      guard let urlString = urls[entry.key], let url = URL(string: urlString)
+      else {
+        continue
+      }
+      let destination = home.appendingPathComponent(entry.fileName)
+      if fileManager.fileExists(atPath: destination.path) {
+        continue
+      }
+      items.append(GeoDownloadItem(remoteURL: url, destination: destination))
+    }
+    return items
   }
 
   func saveRunTime(vpnOptions: Data) {

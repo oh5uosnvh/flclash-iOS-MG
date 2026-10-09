@@ -131,6 +131,9 @@ final class TunnelManagerStore {
     if #available(iOS 17.4, *) {
       proto.excludeDeviceCommunication = options.excludeDeviceCommunication
     }
+    // Launch payload: lets the extension start from the provider
+    // configuration alone (no shared-container requirement).
+    proto.providerConfiguration = sharedStateStore.makeLaunchPayload()
     log(
       "applyNEOptions includeAll=\(options.includeAllNetworks) excludeLocal=\(options.excludeLocalNetworks) excludeAPNs=\(options.excludeAPNs) excludeCellular=\(options.excludeCellularServices) enforceRoutes=\(options.enforceRoutes) excludeDeviceComm=\(options.excludeDeviceCommunication)"
     )

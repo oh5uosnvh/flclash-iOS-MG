@@ -116,7 +116,9 @@ public enum NEHelper {
     if isRunning(status) {
       return true
     }
-    try manager.connection.startVPNTunnel()
+    let payload = (manager.protocolConfiguration as? NETunnelProviderProtocol)?
+      .providerConfiguration as? [String: NSObject]
+    try manager.connection.startVPNTunnel(options: payload)
     return true
   }
 

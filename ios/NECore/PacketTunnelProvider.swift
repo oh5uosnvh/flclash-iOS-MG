@@ -23,7 +23,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     startMemoryProbe()
     startResourceHeartbeat()
     sharedStateStore.clearRunTime()
+    sharedStateStore.attachLaunchPayload(options)
     reloadControlWidget()
+    prepareCoreRuntime()
     guard let snapshot = sharedStateStore.loadVPNOptionsSnapshot() else {
       logger.error("startTunnel failed: missing vpn options")
       completionHandler(PacketTunnelProviderError.missingVPNOptions)
@@ -272,6 +274,82 @@ private enum PacketTunnelProviderError: LocalizedError {
 }
 
 // MARK: - Memory probe
+
+// MARK: - Runtime home preparation
+
+extension PacketTunnelProvider {
+  /// Writes the profile config and fetches missing geo resources into the
+  /// core home directory before the core initializes. Best effort: network
+  /// failures are logged and never block tunnel startup.
+  func prepareCoreRuntime() {
+    let store = sharedStateStore
+    guard let home = store.homeDirectoryForCore() else {
+      logger.error("prepareCoreRuntime: no home directory available")
+      return
+    }
+    let fileManager = FileManager.default
+    if !fileManager.fileExists(atPath: home.path) {
+      try? fileManager.createDirectory(
+        at: home, withIntermediateDirectories: true
+      )
+    }
+    if let configYaml = store.configYamlDataFromPayload() {
+      let destination = home.appendingPathComponent("config.yaml")
+      do {
+        try configYaml.write(to: destination, options: .atomic)
+        logger.info(
+          "prepareCoreRuntime: wrote config.yaml bytes=\(configYaml.count)"
+        )
+      } catch {
+        logger.error(
+          "prepareCoreRuntime: config.yaml write failed: \(error.localizedDescription, privacy: .public)"
+        )
+      }
+    } else if !store.usesAppGroupHome() {
+      logger.warning(
+        "prepareCoreRuntime: no config.yaml payload and no shared container"
+      )
+    }
+    let downloads = store.missingGeoDataDownloads()
+    guard !downloads.isEmpty else {
+      return
+    }
+    logger.info(
+      "prepareCoreRuntime: fetching \(downloads.count) geo resources"
+    )
+    let semaphore = DispatchSemaphore(value: 0)
+    let group = DispatchGroup()
+    let session = URLSession(configuration: .ephemeral)
+    for item in downloads {
+      group.enter()
+      var request = URLRequest(url: item.remoteURL)
+      request.timeoutInterval = 15
+      let task = session.dataTask(with: request) {
+        [weak self] data, _, error in
+        defer { group.leave() }
+        if let error {
+          self?.logger.error(
+            "prepareCoreRuntime: \(item.destination.lastPathComponent, privacy: .public) download failed: \(error.localizedDescription, privacy: .public)"
+          )
+          return
+        }
+        guard let data, !data.isEmpty else {
+          return
+        }
+        try? data.write(to: item.destination, options: .atomic)
+        self?.logger.info(
+          "prepareCoreRuntime: stored \(item.destination.lastPathComponent, privacy: .public) bytes=\(data.count)"
+        )
+      }
+      task.resume()
+    }
+    group.notify(queue: .global()) { semaphore.signal() }
+    // NE startTunnel is watchdog-bound; cap the wait well below the
+    // ~30s kill budget. Missing geo files degrade gracefully.
+    _ = semaphore.wait(timeout: .now() + 25)
+    session.finishTasksAndInvalidate()
+  }
+}
 
 /// Reports the NE process memory headroom every few seconds so the app log
 /// shows whether jetsam pressure precedes the ~10s tunnel death. The probe

@@ -87,6 +87,10 @@ final class SharedStateStore {
     )
   }
 
+  func appGroupIsUsable() -> Bool {
+    appGroupDirectory() != nil
+  }
+
   func eventQueueDirectory() -> URL? {
     appGroupDirectory()?.appendingPathComponent(
       eventQueueDirectoryName,
@@ -97,6 +101,80 @@ final class SharedStateStore {
   func runTime() -> Int {
     UserDefaults(suiteName: appGroupIdentifier)?
       .integer(forKey: runTimeKey) ?? 0
+  }
+
+  // MARK: Launch payload (providerConfiguration)
+
+  // The network extension reads its launch data from the provider
+  // configuration of the saved VPN profile, so a restricted signing
+  // environment without a working shared container can still start the
+  // tunnel. App Group data stays the fast path whenever it is usable.
+  private let geoDataURLs: [String: String] = [
+    "geosite": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+    "geoip": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb",
+    "asn": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb",
+  ]
+
+  private let maxConfigYamlPayloadBytes = 4_000_000
+
+  func configYamlCandidateURLs() -> [URL] {
+    var urls: [URL] = []
+    if let appGroup = appGroupDirectory() {
+      urls.append(appGroup.appendingPathComponent("config.yaml"))
+    }
+    let fileManager = FileManager.default
+    if let supportDir = fileManager.urls(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask
+    ).first {
+      urls.append(supportDir.appendingPathComponent("config.yaml"))
+      if let bundleID = Bundle.main.bundleIdentifier {
+        urls.append(
+          supportDir.appendingPathComponent(bundleID)
+            .appendingPathComponent("config.yaml")
+        )
+      }
+    }
+    return urls
+  }
+
+  func loadConfigYamlForLaunch() -> String? {
+    for url in configYamlCandidateURLs() {
+      if let text = try? String(contentsOf: url, encoding: .utf8),
+        !text.isEmpty
+      {
+        return text
+      }
+    }
+    return nil
+  }
+
+  func makeLaunchPayload() -> [String: Any]? {
+    guard
+      let sharedData = UserDefaults(suiteName: appGroupIdentifier)?
+        .data(forKey: sharedStateKey),
+      let shared = try? JSONSerialization.jsonObject(with: sharedData)
+        as? [String: Any]
+    else {
+      return nil
+    }
+    guard let vpnOptions = shared["vpnOptions"] else {
+      return nil
+    }
+    var payload: [String: Any] = [
+      "launchPayloadVersion": 1,
+      "vpnOptions": vpnOptions,
+    ]
+    if let setupParams = shared[setupParamsKey], !(setupParams is NSNull) {
+      payload["setupParams"] = setupParams
+    }
+    if let configYaml = loadConfigYamlForLaunch(),
+      configYaml.utf8.count <= maxConfigYamlPayloadBytes
+    {
+      payload["configYaml"] = configYaml
+    }
+    payload["geoURLs"] = geoDataURLs
+    return payload
   }
 }
 
