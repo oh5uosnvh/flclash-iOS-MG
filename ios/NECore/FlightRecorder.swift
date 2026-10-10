@@ -71,6 +71,14 @@ final class FlightRecorder {
     }
   }
 
+  /// Synchronous read of the current ring buffer, served to the app on
+  /// demand so the exported log carries the extension's startup timeline.
+  func snapshot() -> String {
+    queue.sync {
+      (try? String(contentsOf: logFileURL(), encoding: .utf8)) ?? ""
+    }
+  }
+
   /// Keeps only the newest `maxLines` lines so the file stays a
   /// crash-window ring buffer rather than an unbounded log.
   private func trimIfNeeded(url: URL) {

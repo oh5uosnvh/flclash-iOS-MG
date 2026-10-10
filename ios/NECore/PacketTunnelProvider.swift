@@ -267,6 +267,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       return
     }
 
+    // Native diagnostics answer without the Go core; the app pulls this on
+    // demand to merge the extension flight log into its exported log.
+    if let nativeResponse = nativeDiagnosticResponse(for: messageData) {
+      logger.debug("handleAppMessage native diagnostic served")
+      completionHandler(nativeResponse)
+      return
+    }
+
     // The Go dispatcher may never call back (core restarting or busy); the
     // system then reports an empty response to the app. Answer exactly once,
     // and add a watchdog so method calls fail with a defined error instead
@@ -317,6 +325,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       )
       complete(response)
     }
+  }
+
+  private func nativeDiagnosticResponse(for messageData: Data) -> Data? {
+    guard
+      let object = try? JSONSerialization.jsonObject(with: messageData)
+        as? [String: Any],
+      object["method"] as? String == "neDiagnosticLog"
+    else {
+      return nil
+    }
+    var payload: [String: Any] = [
+      "result": FlightRecorder.shared.snapshot(),
+      "error": NSNull(),
+    ]
+    if let id = object["id"] {
+      payload["id"] = id
+    }
+    return try? JSONSerialization.data(withJSONObject: payload)
   }
 
   private func methodErrorResponse(

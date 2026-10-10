@@ -625,6 +625,10 @@ final class TunnelCoordinator {
       submitTunnelRequest(target: .running)
     }
 
+    if actualState == .running {
+      scheduleDiagnosticsFetch()
+    }
+
     Task { @MainActor [weak self] in
       guard let self,
         self.requestGeneration == request.generation,
@@ -634,6 +638,59 @@ final class TunnelCoordinator {
         return
       }
       self.notifyExternalState(actualState)
+    }
+  }
+
+  /// Pulls the extension-side flight log over a provider message a few
+  /// seconds after a session starts (long enough to capture the whole
+  /// startup timeline) and merges it into the app-side diagnostic log.
+  private func scheduleDiagnosticsFetch() {
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      try? await Task.sleep(nanoseconds: 12_000_000_000)
+      await self.fetchNetworkExtensionFlightLog()
+    }
+  }
+
+  private func fetchNetworkExtensionFlightLog() async {
+    do {
+      guard
+        let manager = try await managerStore.loadManager(
+          createIfNeeded: false
+        ),
+        manager.connection.status.tunnelState == .running,
+        let session = manager.connection as? NETunnelProviderSession
+      else {
+        return
+      }
+      let request = Data(
+        #"{"id":"flight-log","method":"neDiagnosticLog"}"#.utf8
+      )
+      let response: Data? = try await withCheckedThrowingContinuation {
+        continuation in
+        do {
+          try session.sendProviderMessage(request) { response in
+            continuation.resume(returning: response)
+          }
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+      guard let response,
+        let object = try? JSONSerialization.jsonObject(with: response)
+          as? [String: Any],
+        let flightLog = object["result"] as? String,
+        !flightLog.isEmpty
+      else {
+        return
+      }
+      log("network extension flight log begin")
+      for line in flightLog.split(separator: "\n") {
+        log("[NE] \(line)")
+      }
+      log("network extension flight log end")
+    } catch {
+      log("flight log fetch failed: \(error.localizedDescription)")
     }
   }
 
