@@ -171,39 +171,70 @@ final class PacketTunnelSharedStateStore {
     return Data(configYaml.utf8)
   }
 
-  struct GeoDownloadItem {
-    let remoteURL: URL
-    let destination: URL
-  }
-
-  func missingGeoDataDownloads() -> [GeoDownloadItem] {
-    guard let payload = launchPayload,
-      let urls = payload["geoURLs"] as? [String: String],
-      let home = homeDirectoryForCore()
-    else {
-      return []
+  /// Copies the read-only geodata shipped inside the NECore.appex resource
+  /// bundle into the extension's writable core home. This is intentionally local:
+  /// the NE is started before the tunnel exists, so a direct CDN request here
+  /// can deadlock startup or hit the Network Extension watchdog.
+  @discardableResult
+  func copyBundledGeoDataIfNeeded() -> (copied: [String], missing: [String]) {
+    guard let home = homeDirectoryForCore() else {
+      return ([], ["core-home"])
     }
-    // GeoSite.dat / geoip.metadb / ASN.mmdb are the names the core
-    // resolves at startup (see constant/path.go).
-    let required: [(key: String, fileName: String)] = [
-      ("geosite", "GeoSite.dat"),
-      ("geoip", "geoip.metadb"),
-      ("asn", "ASN.mmdb"),
-    ]
     let fileManager = FileManager.default
-    var items: [GeoDownloadItem] = []
-    for entry in required {
-      guard let urlString = urls[entry.key], let url = URL(string: urlString)
-      else {
+    try? fileManager.createDirectory(at: home, withIntermediateDirectories: true)
+
+    // GeoData is a synchronized resource directory of the NECore target.
+    // Keep a flat-resource fallback because Xcode may flatten resources when
+    // a generated project is opened by an older build tool.
+    let resources = [
+      (name: "GeoSite", ext: "dat", destination: "GeoSite.dat"),
+      (name: "GeoIP", ext: "metadb", destination: "geoip.metadb"),
+      (name: "GeoIP", ext: "dat", destination: "GeoIP.dat"),
+      (name: "ASN", ext: "mmdb", destination: "ASN.mmdb"),
+      (name: "BundleMRS", ext: "7z", destination: "BundleMRS.7z"),
+    ]
+    var copied: [String] = []
+    var missing: [String] = []
+
+    for resource in resources {
+      let destination = home.appendingPathComponent(resource.destination)
+      if fileManager.fileExists(atPath: destination.path),
+        let values = try? destination.resourceValues(forKeys: [.fileSizeKey]),
+        let size = values.fileSize,
+        size > 0
+      {
         continue
       }
-      let destination = home.appendingPathComponent(entry.fileName)
-      if fileManager.fileExists(atPath: destination.path) {
+      let source = Bundle.main.url(
+        forResource: resource.name,
+        withExtension: resource.ext,
+        subdirectory: "GeoData"
+      ) ?? Bundle.main.url(
+        forResource: resource.name,
+        withExtension: resource.ext
+      )
+      guard let source, fileManager.fileExists(atPath: source.path) else {
+        missing.append("\(resource.name).\(resource.ext)")
         continue
       }
-      items.append(GeoDownloadItem(remoteURL: url, destination: destination))
+      let temporary = home.appendingPathComponent(
+        ".\(resource.destination).\(UUID().uuidString).tmp"
+      )
+      do {
+        try? fileManager.removeItem(at: temporary)
+        try fileManager.copyItem(at: source, to: temporary)
+        if fileManager.fileExists(atPath: destination.path) {
+          _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+          try fileManager.moveItem(at: temporary, to: destination)
+        }
+        copied.append(resource.destination)
+      } catch {
+        try? fileManager.removeItem(at: temporary)
+        missing.append("\(resource.name).\(resource.ext)")
+      }
     }
-    return items
+    return (copied, missing)
   }
 
   func saveRunTime(vpnOptions: Data) {

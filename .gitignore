@@ -76,6 +76,7 @@ problems-report.html
 /core_sha256.json
 /core/*.exe
 /assets/data/
+/ios/NECore/GeoData/
 /plugins/rust_api/.claude/
 /ios/Flutter/GeneratedBundleConfig.xcconfig
 /issue-triage/

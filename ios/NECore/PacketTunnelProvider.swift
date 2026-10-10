@@ -12,7 +12,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let networkConfiguration = PacketTunnelNetworkConfiguration()
   private let startupLock = NSLock()
   private var startupCancelled = false
-  private var preparationSession: URLSession?
   private lazy var eventQueue = NECoreEventQueue(
     sharedStateStore: sharedStateStore
   )
@@ -207,10 +206,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   ) {
     startupLock.lock()
     startupCancelled = true
-    let session = preparationSession
-    preparationSession = nil
     startupLock.unlock()
-    session?.invalidateAndCancel()
     logger.info("stopTunnel reason=\(reason.rawValue, privacy: .public)")
     NECoreBridge.neReport(String(format: "stopTunnel reason=%d availableMem=%dMB footprint=%.2fMB", reason.rawValue, Self.availableMemoryMB(), Self.footprintMB()))
     stopMemoryProbe()
@@ -424,9 +420,9 @@ private enum PacketTunnelProviderError: LocalizedError {
 // MARK: - Runtime home preparation
 
 extension PacketTunnelProvider {
-  /// Prepare on disk before starting Go. Low-memory geodata initialization
-  /// does not download missing databases; MMDB access can terminate the core.
-  /// URLSession download tasks avoid retaining whole databases in NE memory.
+  /// Prepare the writable core home before starting Go. The low-memory
+  /// extension receives its geodata from the containing app bundle rather
+  /// than making a pre-tunnel network request.
   func prepareCoreRuntime(completionHandler: @escaping (Error?) -> Void) {
     let store = sharedStateStore
     let flight = FlightRecorder.shared
@@ -449,76 +445,22 @@ extension PacketTunnelProvider {
       completionHandler(error)
       return
     }
-    let downloads = store.missingGeoDataDownloads()
-    guard !downloads.isEmpty else {
-      flight.record("geo complete, no downloads")
-      completionHandler(nil)
-      return
+    // Never block NE startup on direct Internet access. The tunnel has not
+    // claimed traffic yet, so downloading geo databases here is both
+    // unreliable on domestic networks and capable of exhausting the start
+    // watchdog. The NECore target ships these resources in its GeoData
+    // resource directory; copy them locally in a bounded atomic operation.
+    let geo = store.copyBundledGeoDataIfNeeded()
+    if !geo.copied.isEmpty {
+      flight.record("geo copied from app bundle: \(geo.copied.joined(separator: ","))")
     }
-    flight.record("geo fetching to disk count=\(downloads.count)")
-    let group = DispatchGroup()
-    let errors = RuntimePreparationErrors()
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 15
-    configuration.timeoutIntervalForResource = 20
-    let session = URLSession(configuration: configuration)
-    startupLock.lock()
-    preparationSession = session
-    let cancelled = startupCancelled
-    startupLock.unlock()
-    if cancelled {
-      session.invalidateAndCancel()
-      completionHandler(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
-      return
+    if !geo.missing.isEmpty {
+      let message = "geo bundle resources missing: \(geo.missing.joined(separator: ","))"
+      flight.record(message)
+      NECoreBridge.neReport(message)
+      logger.warning("\(message, privacy: .public)")
     }
-    for item in downloads {
-      group.enter()
-      session.downloadTask(with: item.remoteURL) { temporaryURL, response, error in
-        defer { group.leave() }
-        do {
-          if let error { throw error }
-          guard let temporaryURL,
-            let http = response as? HTTPURLResponse,
-            (200...299).contains(http.statusCode),
-            !(http.mimeType?.lowercased().contains("text/html") ?? false),
-            let size = try temporaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-            size > 0
-          else {
-            throw NSError(domain: "FlClash.Startup", code: 3,
-              userInfo: [NSLocalizedDescriptionKey: "Invalid download for \(item.destination.lastPathComponent), HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)"])
-          }
-          try FileManager.default.moveItem(at: temporaryURL, to: item.destination)
-          flight.record("geo stored \(item.destination.lastPathComponent) bytes=\(size)")
-        } catch {
-          errors.record(error)
-          flight.record("geo failed \(item.destination.lastPathComponent): \(error.localizedDescription)")
-        }
-      }.resume()
-    }
-    group.notify(queue: .global()) {
-      session.finishTasksAndInvalidate()
-      self.startupLock.lock()
-      self.preparationSession = nil
-      self.startupLock.unlock()
-      completionHandler(errors.first)
-    }
-  }
-}
-
-private final class RuntimePreparationErrors: @unchecked Sendable {
-  private let lock = NSLock()
-  private var stored: Error?
-
-  func record(_ error: Error) {
-    lock.lock()
-    defer { lock.unlock() }
-    if stored == nil { stored = error }
-  }
-
-  var first: Error? {
-    lock.lock()
-    defer { lock.unlock() }
-    return stored
+    completionHandler(nil)
   }
 }
 

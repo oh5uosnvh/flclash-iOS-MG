@@ -29,3 +29,15 @@ swiftc -swift-version 5 \
   tool/ios/SharedLocationTests.swift -o "$work/shared_location"
 "$work/shared_location"
 echo 'PASS shared container mapping regression'
+
+# Startup must remain offline: a Packet Tunnel cannot rely on a CDN before
+# it has claimed device traffic. GeoData is staged into the NECore bundle.
+if grep -nE 'downloadTask|geoURLs|missingGeoDataDownloads' \
+  ios/NECore/PacketTunnelProvider.swift \
+  ios/NECore/PacketTunnelSharedStateStore.swift; then
+  echo 'FAIL: NE startup still contains a network GeoData dependency' >&2
+  exit 1
+fi
+grep -q 'copyBundledGeoDataIfNeeded' ios/NECore/PacketTunnelProvider.swift
+grep -q 'stageIOSGeoData' setup.dart
+echo 'PASS offline GeoData startup guard'

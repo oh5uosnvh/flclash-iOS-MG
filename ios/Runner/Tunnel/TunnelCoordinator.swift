@@ -31,6 +31,7 @@ final class TunnelCoordinator {
   private var configurationContinuations: [CheckedContinuation<Void, Error>] = []
   private var needsStatusRefresh = false
   private var statusRefreshShouldNotify = false
+  private var diagnosticsFetchInFlight = false
 
   init(
     managerStore: TunnelManagerStore,
@@ -498,19 +499,24 @@ final class TunnelCoordinator {
         // Pull the extension flight log while the start is still in
         // progress: a hung phase (payload, geo, quickSetup, startTun)
         // shows up in the app log without waiting for success.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-          guard let self,
-            self.tunnelWait === wait,
-            self.isCurrent(request)
-          else {
-            return
+        for delay in [3, 8, 20, 40] {
+          DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(delay)) { [weak self] in
+            guard let self,
+              self.tunnelWait === wait,
+              self.isCurrent(request)
+            else {
+              return
+            }
+            self.log(
+              "start still in progress (\(delay)s); pulling extension flight log"
+            )
+            self.scheduleDiagnosticsFetch(delay: 0)
           }
-          self.log("start still in progress; pulling extension flight log")
-          self.scheduleDiagnosticsFetch(delay: 0)
         }
         // A start that never reaches a running or terminal state must not
         // hold the UI pending forever; stop the half-started tunnel and
-        // resolve with the observed status.
+        // resolve with the observed status. GeoData is bundled, so this is
+        // a lifecycle budget rather than a network-download budget.
         DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
           guard let self,
             self.tunnelWait === wait,
@@ -660,12 +666,22 @@ final class TunnelCoordinator {
   private func scheduleDiagnosticsFetch(delay seconds: TimeInterval = 12) {
     Task { @MainActor [weak self] in
       guard let self else { return }
-      try? await Task.sleep(nanoseconds: 12_000_000_000)
+      if seconds > 0 {
+        try? await Task.sleep(
+          nanoseconds: UInt64(seconds * 1_000_000_000)
+        )
+      }
+      guard !Task.isCancelled else { return }
       await self.fetchNetworkExtensionFlightLog()
     }
   }
 
   private func fetchNetworkExtensionFlightLog() async {
+    guard !diagnosticsFetchInFlight else {
+      return
+    }
+    diagnosticsFetchInFlight = true
+    defer { diagnosticsFetchInFlight = false }
     do {
       guard
         let manager = try await managerStore.loadManager(

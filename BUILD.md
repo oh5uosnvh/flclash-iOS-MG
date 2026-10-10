@@ -229,6 +229,12 @@ A: `plugins/rust_api` 需要 Rust 工具链：`rustup update stable`。
 **Q: 实机 NE 启动后立刻断开？**
 A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统可能在扩展入口前拒绝启动；VPN 列表有条目不能排除签名问题。若有 NE 的 footprint 记录，再结合 JetsamEvent/崩溃日志判断内存，不以 Linux RSS/Private_Dirty 代替 iOS phys_footprint。
 
+**Q: iOS NE 启动依赖 Geo 数据吗？**
+A: 不再依赖启动时的直连下载。`setup.dart` 在 iOS 构建前把 `assets/data/` 的 GeoSite/GeoIP/ASN/BundleMRS 复制到 `ios/NECore/GeoData/`，扩展启动时原子复制到可写 core home。这样首次安装、国内直连、巨魔和自签都不会因为 CDN 不可达卡在 `startTunnel`；CI 会逐项检查五个资源均存在且非空。
+
+**Q: 为什么 iOS 不设置系统 HTTP/HTTPS 代理？**
+A: iOS 核心的设备流量走 Packet Tunnel/TUN；App 侧 HTTP 已固定 `DIRECT`，由系统隧道路由接管。不能再把系统代理指向 `127.0.0.1:mixed-port`，否则会绕过 TUN 路由到一个不应依赖的本地端口。
+
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
@@ -239,7 +245,7 @@ A: 内核 `loadProvider` 的低内存构建（iOS NE 是 `with_low_memory`）里
 A: NE 的核心事件原本只能写 App Group 目录（`core-events`），无组时全部丢失。现在 NE 维护 300 条内存环，App 在隧道运行期每秒（及收到 Darwin 通知时）通过 provider 消息 `neDrainEvents` 抽取并转发给 Flutter；巨魔等有组环境仍走原文件队列，两条通道互不干扰。
 
 **Q: VPN 卡在 connecting 怎么定位？**
-A: 启动等待 8 秒仍未完成时，协调器自动通过 provider 消息拉取 NE 飞行日志（`neDiagnosticLog`，含 payload/geo/quickSetup/startTun 每阶段毫秒时间戳）并注入 `[VPN-DIAG]`/`[NE]` 日志行；45 秒仍无果则主动停止半启动隧道。卡在哪一阶段，导出日志直接可见。
+A: 启动等待 3/8/20/40 秒仍未完成时，协调器按阶段通过 provider 消息拉取 NE 飞行日志（`neDiagnosticLog`，含 payload/GeoData/quickSetup/startTun 每阶段毫秒时间戳）并注入 `[VPN-DIAG]`/`[NE]` 日志行；45 秒仍无果则主动停止半启动隧道。诊断请求有并发保护，卡住时不会重复制造消息风暴。
 
 **Q: 重启期间 DNS 报 "listen udp 0.0.0.0:1053: bind: address already in use"？**
 A: 重签环境的 NE 重启有进程重叠窗口，旧进程还占着 DNS/inbound 端口时新核心会 bind 失败（对整个会话致命）。修复在内核侧（对齐参考包能力）：`core/mihomo/adapter/inbound/listen.go` 的 Control 在 bind 前统一设置 SO_REUSEADDR+SO_REUSEPORT，新旧进程可同时持有端口，冲突消失。
@@ -251,7 +257,7 @@ A: NE 核心的 config.yaml 只在隧道启动时由载荷写入，切换配置�
 A: iOS 硬性限制 VPN 配置的 providerConfiguration 最大 524,288 字节，魔改订阅生成的 YAML（1MB+）直接塞载荷会被系统拒绝保存，隧道起不来，仪表盘方法调用全部报 empty response。处理：小配置（≤200KB）仍内联；更大时 App 端用 raw DEFLATE 压缩后放 `configYamlDeflate`（附 `configYamlSize` 原始长度），扩展端解码；压缩后仍超 430KB 预算则标记 `configOmitted` 并让启动报明确错误。另外 `handleAppMessage` 增加 15 秒看门狗：Go 核心不回话时返回 `core_timeout` 错误而不是静默无响应。门禁测试含压缩往返与扩展端解码用例。
 
 **Q: 本轮载荷修复覆盖什么？**
-A: 平铺启动字典、旧版嵌套 `launchPayload`、无 options 的系统/On Demand 启动、非法载荷回退，以及主 App 私有状态副本。`sh tool/ios/test_launch_payload.sh` 在 macOS 编译真实源码，先证明旧版失败，再验证新版。系统签名放行、首次 Geo 资源下载、无 App Group 的长期日志/运行状态同步仍需真机验证；不能把 CI 构建成功说成 iOS 自签实测通过。
+A: 平铺启动字典、旧版嵌套 `launchPayload`、无 options 的系统/On Demand 启动、非法载荷回退，以及主 App 私有状态副本。`sh tool/ios/test_launch_payload.sh` 在 macOS 编译真实源码，先证明旧版失败，再验证新版。系统签名放行、NECore 资源复制、无 App Group 的长期日志/运行状态同步仍需真机验证；不能把 CI 构建成功说成 iOS 自签实测通过。
 
 **Q: 测速后 memory pressure 连环出现？**
 A: 属正常防御路径：`memory_pressure_critical` → `memory_pressure_reclaimed` 成对出现且 footprint 回落即可；若只 critical 不 reclaimed 才是问题。

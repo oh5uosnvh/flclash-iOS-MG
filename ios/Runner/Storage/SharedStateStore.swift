@@ -119,11 +119,11 @@ final class SharedStateStore {
   // configuration of the saved VPN profile, so a restricted signing
   // environment without a working shared container can still start the
   // tunnel. App Group data stays the fast path whenever it is usable.
-  private let geoDataURLs: [String: String] = [
-    "geosite": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
-    "geoip": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb",
-    "asn": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb",
-  ]
+  //
+  // Geo databases are deliberately not part of this payload. They are large,
+  // and the NE low-memory core must never make tunnel startup depend on a
+  // direct network request. GeoData is bundled into NECore and copied into
+  // its writable home before the core starts.
 
   // The system rejects saved provider configurations above 524,288 bytes
   // ("The configuration is too large"). Magic-protocol subscriptions ship
@@ -218,7 +218,6 @@ final class SharedStateStore {
         payload["configOmitted"] = true
       }
     }
-    payload["geoURLs"] = geoDataURLs
     return payload
   }
 }

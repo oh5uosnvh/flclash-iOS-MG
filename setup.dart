@@ -391,6 +391,9 @@ Future<int> _package(
   required bool verbose,
 }) async {
   await ensureGeoData(rootDir: rootDir);
+  if (platform == 'ios') {
+    await stageIOSGeoData(rootDir);
+  }
 
   final file = File(p.join(rootDir, 'env.json'));
   await file.writeAsString(
@@ -536,6 +539,37 @@ Future<void> injectPortableConfigDirIntoZip(String zipPath) async {
   final tmp = File('$zipPath.tmp');
   await tmp.writeAsBytes(encoded, flush: true);
   await tmp.rename(zipPath);
+}
+
+/// Stages the same databases the app already ships into the NECore
+/// synchronized resource directory. A Packet Tunnel starts before it can
+/// use network traffic, so the extension must not fetch these files from a
+/// CDN during startTunnel.
+Future<void> stageIOSGeoData(String rootDir) async {
+  const names = [
+    'GeoSite.dat',
+    'GeoIP.metadb',
+    'GeoIP.dat',
+    'ASN.mmdb',
+    'BundleMRS.7z',
+  ];
+  final sourceDir = Directory(p.join(rootDir, 'assets', 'data'));
+  final targetDir = Directory(p.join(rootDir, 'ios', 'NECore', 'GeoData'));
+  await targetDir.create(recursive: true);
+  for (final name in names) {
+    final source = File(p.join(sourceDir.path, name));
+    if (!await source.exists()) {
+      throw StateError('Required iOS GeoData asset is missing: ${source.path}');
+    }
+    final bytes = await source.length();
+    if (bytes == 0) {
+      throw StateError('Required iOS GeoData asset is empty: ${source.path}');
+    }
+    await source.copy(p.join(targetDir.path, name));
+  }
+  stdout.writeln(
+    'Staged ${names.length} offline GeoData resources for NECore',
+  );
 }
 
 Future<int> packageIOSNoSign({
