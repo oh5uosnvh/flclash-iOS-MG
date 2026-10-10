@@ -232,9 +232,6 @@ A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统
 **Q: iOS NE 启动依赖 Geo 数据吗？**
 A: 不再依赖启动时的直连下载。`setup.dart` 在 iOS 构建前把 `assets/data/` 的 GeoSite/GeoIP/ASN/BundleMRS 复制到 `ios/NECore/GeoData/`，扩展启动时原子复制到可写 core home。这样首次安装、国内直连、巨魔和自签都不会因为 CDN 不可达卡在 `startTunnel`；CI 会逐项检查五个资源均存在且非空。
 
-**Q: 为什么 iOS 不设置系统 HTTP/HTTPS 代理？**
-A: iOS 核心的设备流量走 Packet Tunnel/TUN；App 侧 HTTP 已固定 `DIRECT`，由系统隧道路由接管。不能再把系统代理指向 `127.0.0.1:mixed-port`，否则会绕过 TUN 路由到一个不应依赖的本地端口。
-
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
