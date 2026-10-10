@@ -232,6 +232,9 @@ A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
+**Q: 重启期间 DNS 报 "listen udp 0.0.0.0:1053: bind: address already in use"？**
+A: 重签环境的 NE 重启有进程重叠窗口，旧进程还占着 DNS/inbound 端口时新核心会 bind 失败（对整个会话致命）。修复在内核侧（对齐参考包能力）：`core/mihomo/adapter/inbound/listen.go` 的 Control 在 bind 前统一设置 SO_REUSEADDR+SO_REUSEPORT，新旧进程可同时持有端口，冲突消失。
+
 **Q: 切换配置后连的还是上一个配置的节点？**
 A: NE 核心的 config.yaml 只在隧道启动时由载荷写入，切换配置若只推送 setupConfig 会把旧配置重新 apply 一遍。现在三层防护：Dart 检测到配置变更且隧道在运行时直接重启隧道；Swift 协调器比对配置指纹（FNV-1a），会话期间配置变了强制 stop→save→start；路由器在指纹失配时拒绝对过期核心推送 setupConfig/updateConfig。另有 45 秒启动等待超时，避免 UI 永远停在加载。
 

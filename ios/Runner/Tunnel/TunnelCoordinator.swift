@@ -111,6 +111,17 @@ final class TunnelCoordinator {
     return current != running
   }
 
+  /// True while a session is active (including connecting/reasserting
+  /// transitions), so config changes can be reconciled on it.
+  var hasActiveTunnelSession: Bool {
+    switch observedTunnelStatus {
+    case .connected, .connecting, .reasserting:
+      return true
+    default:
+      return false
+    }
+  }
+
   func publishConnectionState() {
     let state: String
     if tunnelRequest != nil {
@@ -303,6 +314,7 @@ final class TunnelCoordinator {
 
       manager.isEnabled = true
       managerStore.applyNetworkExtensionOptions(to: manager, enableOnDemand: true)
+      request.sessionConfigFingerprint = managerStore.currentConfigFingerprint()
       log("start save preferences")
       do {
         try await awaitPreferenceResult { completion in
@@ -575,7 +587,10 @@ final class TunnelCoordinator {
     tunnelRequest = nil
     defer { publishConnectionState() }
     if actualState == .running {
-      let fingerprint = managerStore.currentConfigFingerprint()
+      // Persist the fingerprint of the payload THIS session was started
+      // with, not the current disk state: a config switch racing the start
+      // must stay detectable so it converges through another restart.
+      let fingerprint = request.sessionConfigFingerprint ?? runningConfigFingerprint
       runningConfigFingerprint = fingerprint
       if let fingerprint {
         UserDefaults.standard.set(
@@ -599,6 +614,16 @@ final class TunnelCoordinator {
     log(
       "\(request.target.description) completed actual=\(actualState.description) generation=\(request.generation)"
     )
+
+    // A config switch that raced this start leaves the new config unapplied;
+    // converge with one more restart instead of keeping a stale core.
+    if actualState == .running,
+      let current = managerStore.currentConfigFingerprint(),
+      current != runningConfigFingerprint
+    {
+      log("config changed while session was starting; converging")
+      submitTunnelRequest(target: .running)
+    }
 
     Task { @MainActor [weak self] in
       guard let self,

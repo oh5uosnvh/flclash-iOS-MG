@@ -53,6 +53,12 @@ func (l ListenConfig) newListenConfig() *tfo.ListenConfig {
 	keepalive.SetNetListenConfig(&lc.ListenConfig)
 	mptcp.SetNetListenConfig(&lc.ListenConfig, MPTCP())
 	lc.Control = func(network, address string, c syscall.RawConn) error {
+		// Reuse options must be set BEFORE bind: during NE restarts the old
+		// process can still hold the DNS/inbound ports, and a plain bind
+		// fails with "address already in use" for the whole new session.
+		if err := sockopt.RawConnReuseaddr(c); err != nil {
+			return err
+		}
 		if l.routeMark != 0 {
 			err := sockopt.RawConnMark(c, l.routeMark)
 			if err != nil {

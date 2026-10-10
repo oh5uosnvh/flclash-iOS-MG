@@ -95,6 +95,17 @@ final class TunnelController {
     coordinator.toggleTunnelRequest()
   }
 
+  /// Called when a configuration method detected that the running extension
+  /// core still holds a stale config; one restart applies the new payload.
+  func reconcileConfigChange() {
+    guard coordinator.hasActiveTunnelSession,
+      coordinator.configChangedSinceSessionStart
+    else {
+      return
+    }
+    coordinator.submitTunnelRequest(target: .running)
+  }
+
   func reloadOnDemandRules() async throws {
     try await coordinator.reloadOnDemandRules()
   }
@@ -123,33 +134,41 @@ final class TunnelController {
       )
     }
 
-    return try await withCheckedThrowingContinuation { continuation in
-      do {
-        try session.sendProviderMessage(data) { response in
-          Task { @MainActor in
-            guard let response,
-              let message = String(data: response, encoding: .utf8)
-            else {
-              continuation.resume(
-                throwing: ProviderMessageError(
-                  code: "empty_response",
-                  message: "empty network extension response"
-                )
-              )
-              return
-            }
-            continuation.resume(returning: message)
+    // One retry on a nil response: during restarts the system can drop a
+    // provider message even though the session still reports running.
+    let emptyResponseError = ProviderMessageError(
+      code: "empty_response",
+      message: "empty network extension response"
+    )
+    for attempt in 0...1 {
+      let response: Data? = try await withCheckedThrowingContinuation {
+        continuation in
+        do {
+          try session.sendProviderMessage(data) { response in
+            continuation.resume(returning: response)
           }
-        }
-      } catch {
-        continuation.resume(
-          throwing: ProviderMessageError(
-            code: "network_extension_error",
-            message: error.localizedDescription
+        } catch {
+          continuation.resume(
+            throwing: ProviderMessageError(
+              code: "network_extension_error",
+              message: error.localizedDescription
+            )
           )
-        )
+        }
+      }
+      if let response,
+        let message = String(data: response, encoding: .utf8)
+      {
+        return message
+      }
+      if attempt == 0 {
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        guard session.status.tunnelState == .running else {
+          break
+        }
       }
     }
+    throw emptyResponseError
   }
 
   func isCoreActive() async -> Bool {

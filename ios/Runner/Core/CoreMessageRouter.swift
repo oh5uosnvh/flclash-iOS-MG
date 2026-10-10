@@ -238,15 +238,12 @@ final class CoreMessageRouter {
     }
 
     let appResponse = try await sendCoreMessage(appData, route: .app)
-    if networkExtensionActive,
-      tunnelController.configChangedSinceSessionStart
-    {
+    if tunnelController.configChangedSinceSessionStart {
       // The running extension core still holds the previous config; pushing
-      // setup/update params would re-apply that stale config. The tunnel
-      // restart carries the new config.yaml into the extension home instead.
-      log(
-        "config changed since session start; skip network extension config push"
-      )
+      // setup/update params would re-apply that stale config. Reapply the
+      // config through a tunnel restart instead of the stale core.
+      log("config changed since session start; tunnel restart will apply it")
+      tunnelController.reconcileConfigChange()
       return appResponse
     }
     guard networkExtensionActive,
@@ -263,10 +260,27 @@ final class CoreMessageRouter {
         with: false
       )
       : data
-    return try await sendCoreMessage(
-      networkExtensionData,
-      route: .networkExtension
-    )
+    // Best-effort: a transient failure here must not surface as a
+    // user-facing error; the restart path guarantees the config reaches
+    // the extension.
+    do {
+      let neResponse = try await sendCoreMessage(
+        networkExtensionData,
+        route: .networkExtension
+      )
+      if methodResponseSucceeded(neResponse) {
+        return neResponse
+      }
+      log(
+        "network extension config push returned an error (restart path will reconcile)"
+      )
+      return appResponse
+    } catch {
+      log(
+        "network extension config push failed (restart path will reconcile): \(error.localizedDescription)"
+      )
+      return appResponse
+    }
   }
 
   private func sendCoreMessage(

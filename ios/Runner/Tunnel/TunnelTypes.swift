@@ -43,6 +43,7 @@ final class TunnelRequest {
   let target: TunnelTarget
   var preferenceRetryCount = 0
   var forceRestartUsed = false
+  var sessionConfigFingerprint: String?
 
   init(
     generation: UInt64,
