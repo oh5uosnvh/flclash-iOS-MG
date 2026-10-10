@@ -36,10 +36,10 @@ private func _secTaskCopyValueForEntitlement(
 /// No private APIs: SecTask mirrors what the system already granted this
 /// process, and FileManager answers the same container requests the
 /// reference compatibility layer used to swizzle.
-enum SharedLocation {
-  static let groupPrefix = "group."
-  static let fallbackBaseBundleID = "cc.flclash.mg"
-  static let entitlementKey = "com.apple.security.application-groups"
+public enum SharedLocation {
+  public static let groupPrefix = "group."
+  public static let fallbackBaseBundleID = "cc.flclash.mg"
+  public static let entitlementKey = "com.apple.security.application-groups"
 
   static let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? fallbackBaseBundleID,
@@ -50,39 +50,39 @@ enum SharedLocation {
 
   /// App extensions run with their own bundle id (`<app>.NECore`,
   /// `<app>.Widget`); every process must derive the same logical group.
-  static func baseBundleIdentifier(of bundleIdentifier: String) -> String {
+  public static func baseBundleIdentifier(of bundleIdentifier: String) -> String {
     for suffix in [".NECore", ".Widget"] where bundleIdentifier.hasSuffix(suffix) {
       return String(bundleIdentifier.dropLast(suffix.count))
     }
     return bundleIdentifier
   }
 
-  static func logicalGroupID(forBase baseBundleID: String) -> String {
+  public static func logicalGroupID(forBase baseBundleID: String) -> String {
     groupPrefix + baseBundleID
   }
 
-  static var baseBundleID: String {
+  public static var baseBundleID: String {
     let bundleIdentifier = Bundle.main.bundleIdentifier ?? fallbackBaseBundleID
     return baseBundleIdentifier(of: bundleIdentifier)
   }
 
-  static var logicalGroupID: String {
+  public static var logicalGroupID: String {
     logicalGroupID(forBase: baseBundleID)
   }
 
   // MARK: Resolution
 
-  struct Resolution: Equatable {
-    let groupID: String
-    let container: URL
-    let source: String
+  public struct Resolution: Equatable {
+    public let groupID: String
+    public let container: URL
+    public let source: String
   }
 
   /// Pure decision logic, unit-tested in tool/ios/SharedLocationTests.swift.
   /// `container` is injected so tests exercise the policy without a signing
   /// environment. The container answer is the ground truth; the authorized
   /// list only supplies candidates to try after the logical name fails.
-  static func pickGroup(
+  public static func pickGroup(
     expected: String,
     authorized: [String],
     container: (String) -> URL?
@@ -115,7 +115,7 @@ enum SharedLocation {
 
   /// Re-evaluated per call: the calls are cheap, and signing state can only
   /// change by reinstalling the app (a new process).
-  static func resolve() -> Resolution? {
+  public static func resolve() -> Resolution? {
     let expected = logicalGroupID
     let authorized = authorizedGroups()
     if let resolution = pickGroup(
@@ -144,7 +144,7 @@ enum SharedLocation {
 
   /// Group defaults for the container this process can actually use.
   /// Callers already handle nil (no usable container).
-  static func defaults() -> UserDefaults? {
+  public static func defaults() -> UserDefaults? {
     guard let resolution = resolve() else {
       return nil
     }
@@ -152,7 +152,7 @@ enum SharedLocation {
   }
 
   /// One positive os_log line at startup naming the group in use.
-  static func logStartupDiagnostics() {
+  public static func logStartupDiagnostics() {
     guard let resolution = resolve() else {
       return
     }
@@ -163,13 +163,13 @@ enum SharedLocation {
 
   // MARK: System inputs
 
-  static func authorizedGroups() -> [String] {
+  public static func authorizedGroups() -> [String] {
     groups(fromEntitlement: entitlementValue())
   }
 
   /// Entitlement payloads are arrays; some signing paths emit a bare
   /// string. Anything else is unusable, not an empty list to hide.
-  static func groups(fromEntitlement raw: Any?) -> [String] {
+  public static func groups(fromEntitlement raw: Any?) -> [String] {
     if let list = raw as? [Any] {
       return list.compactMap { $0 as? String }
     }
@@ -194,7 +194,7 @@ enum SharedLocation {
     return raw
   }
 
-  static func defaultContainer(_ groupID: String) -> URL? {
+  public static func defaultContainer(_ groupID: String) -> URL? {
     FileManager.default.containerURL(
       forSecurityApplicationGroupIdentifier: groupID
     )
