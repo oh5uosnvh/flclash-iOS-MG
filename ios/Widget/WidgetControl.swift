@@ -48,7 +48,7 @@ extension WidgetControl {
       let isOn = manager.map {
         NEHelper.isRunning($0.connection.status)
       } ?? false
-      let defaults = UserDefaults(suiteName: NEHelper.appGroupIdentifier)
+      let defaults = SharedLocation.defaults()
       let profileName: String
       let showProfileName: Bool
       if let data = defaults?.data(forKey: "sharedState"),

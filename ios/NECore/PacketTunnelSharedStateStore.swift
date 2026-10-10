@@ -1,11 +1,14 @@
 import Foundation
 
+#if canImport(Shared)
+import Shared
+#endif
+
 enum PacketTunnelEnvironment {
   static let extensionBundleIdentifier = Bundle.main.bundleIdentifier!
   static let baseBundleIdentifier = String(
     extensionBundleIdentifier.dropLast(".NECore".count)
   )
-  static let appGroupIdentifier = "group.\(baseBundleIdentifier)"
   static let widgetIdentifier = "\(baseBundleIdentifier).Widget"
   static let eventNotificationName =
     "\(extensionBundleIdentifier).event"
@@ -128,10 +131,7 @@ final class PacketTunnelSharedStateStore {
   }
 
   func appGroupDirectory() -> URL? {
-    FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier:
-        PacketTunnelEnvironment.appGroupIdentifier
-    )
+    SharedLocation.resolve()?.container
   }
 
   func sandboxHomeDirectory() -> URL? {
@@ -207,9 +207,7 @@ final class PacketTunnelSharedStateStore {
   }
 
   private var userDefaults: UserDefaults? {
-    UserDefaults(
-      suiteName: PacketTunnelEnvironment.appGroupIdentifier
-    )
+    SharedLocation.defaults()
   }
 }
 

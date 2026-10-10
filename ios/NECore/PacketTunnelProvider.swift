@@ -3,6 +3,10 @@ import NetworkExtension
 import WidgetKit
 import os
 
+#if canImport(Shared)
+import Shared
+#endif
+
 final class PacketTunnelProvider: NEPacketTunnelProvider {
   private let sharedStateStore = PacketTunnelSharedStateStore()
   private let networkConfiguration = PacketTunnelNetworkConfiguration()
@@ -28,6 +32,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     let flight = FlightRecorder.shared
     flight.record("startTunnel begin mem=\(Self.availableMemoryMB())MB")
     NECoreBridge.neReport("startTunnel begin")
+    // Name the shared container actually in use before anything reads
+    // state; this separates "no shared container" from later failures.
+    if let shared = SharedLocation.resolve() {
+      flight.record("sharedGroup=\(shared.groupID) source=\(shared.source)")
+    } else {
+      flight.record("sharedGroup=none; payload/sandbox fallbacks active")
+    }
     startMemoryProbe()
     startResourceHeartbeat()
     sharedStateStore.clearRunTime()

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:fl_clash/common/common.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -94,11 +95,17 @@ class AppPath {
     }
     try {
       final packageInfo = await PackageInfo.fromPlatform();
-      final appGroupPath =
-          await PathProviderFoundation().getContainerPath(
-            appGroupIdentifier: 'group.${packageInfo.packageName}',
-          ) ??
-          '';
+      // The native side resolves the group container the current signing
+      // actually authorizes; the plugin lookup only knows the logical name
+      // and fails closed when re-signing renamed the group.
+      var appGroupPath = await _nativeAppGroupPath();
+      if (appGroupPath.isEmpty) {
+        appGroupPath =
+            await PathProviderFoundation().getContainerPath(
+              appGroupIdentifier: 'group.${packageInfo.packageName}',
+            ) ??
+            '';
+      }
       dataDir.complete(
         await migrateIOSDataDirectory(
           supportDirectory: supportDir,
@@ -107,6 +114,19 @@ class AppPath {
       );
     } catch (_) {
       dataDir.complete(supportDir);
+    }
+  }
+
+  /// Asks the Runner for the shared container authorized by the current
+  /// signing. The channel may not be up during early startup; the plugin
+  /// fallback then answers for signing setups that already work.
+  static Future<String> _nativeAppGroupPath() async {
+    try {
+      final path = await MethodChannel('$packageName/service')
+          .invokeMethod<String>('getAppGroupPath');
+      return path ?? '';
+    } catch (_) {
+      return '';
     }
   }
 

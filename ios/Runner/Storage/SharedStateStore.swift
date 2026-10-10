@@ -1,4 +1,5 @@
 import Foundation
+import Shared
 import WidgetKit
 
 final class SharedStateStore {
@@ -8,11 +9,10 @@ final class SharedStateStore {
 
   private let eventQueueDirectoryName = "core-events"
 
-  let appGroupIdentifier = "group.\(Bundle.main.bundleIdentifier!)"
   let eventNotificationName = "\(Bundle.main.bundleIdentifier!).NECore.event"
 
   func activeVpnOptions() -> String? {
-    guard let data = UserDefaults(suiteName: appGroupIdentifier)?
+    guard let data = SharedLocation.defaults()?
       .data(forKey: "activeVpnOptions")
     else {
       return nil
@@ -23,9 +23,10 @@ final class SharedStateStore {
   func saveSharedState(_ data: Data) -> Bool {
     // A private copy is required when signing did not grant the expected
     // App Group. Group defaults alone are not a cross-process fallback.
+    // SharedLocation.defaults() is nil without a usable container, so the
+    // private copy below stays the only store in that case.
     let privateDefaults = UserDefaults.standard
-    let groupDefaults = appGroupIsUsable()
-      ? UserDefaults(suiteName: appGroupIdentifier) : nil
+    let groupDefaults = SharedLocation.defaults()
     let previousControlDisplayState = controlDisplayState(from: savedSharedState())
     let stores = [privateDefaults] + (groupDefaults.map { [$0] } ?? [])
     if let json = try? JSONSerialization.jsonObject(with: data)
@@ -72,8 +73,7 @@ final class SharedStateStore {
     if let data = UserDefaults.standard.data(forKey: sharedStateKey) {
       return data
     }
-    guard appGroupIsUsable() else { return nil }
-    return UserDefaults(suiteName: appGroupIdentifier)?.data(forKey: sharedStateKey)
+    return SharedLocation.defaults()?.data(forKey: sharedStateKey)
   }
 
   func loadTunnelConfiguration() -> TunnelConfiguration {
@@ -94,9 +94,7 @@ final class SharedStateStore {
   }
 
   func appGroupDirectory() -> URL? {
-    FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: appGroupIdentifier
-    )
+    SharedLocation.resolve()?.container
   }
 
   func appGroupIsUsable() -> Bool {
@@ -111,7 +109,7 @@ final class SharedStateStore {
   }
 
   func runTime() -> Int {
-    UserDefaults(suiteName: appGroupIdentifier)?
+    SharedLocation.defaults()?
       .integer(forKey: runTimeKey) ?? 0
   }
 

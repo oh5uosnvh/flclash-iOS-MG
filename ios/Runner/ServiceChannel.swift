@@ -1,6 +1,7 @@
 import Flutter
 import Foundation
 import os
+import Shared
 
 @MainActor
 private final class CoreMessageRouterReference {
@@ -155,6 +156,10 @@ final class ServiceChannel {
       Task {
         result(await tunnelController.getRunTime())
       }
+    case "getAppGroupPath":
+      // Dart asks for the shared container the current signing actually
+      // authorizes; an empty string keeps the plugin fallback path.
+      result(SharedLocation.resolve()?.container.path ?? "")
     case "getActiveVpnOptions":
       Task {
         let running = await tunnelController.getRunTime() > 0

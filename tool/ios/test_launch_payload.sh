@@ -14,7 +14,17 @@ fi
 cat "$work/before.log"
 grep -q '^FAIL flat app start options$' "$work/before.log"
 echo 'PASS reproduced original flat-payload regression'
+# The after-build compiles the real SharedLocation source alongside the
+# extension store, mirroring the target linking of libShared.a.
 swiftc -swift-version 5 -D PROVIDER_CONFIGURATION_FALLBACK \
+  ios/Shared/SharedLocation.swift \
   ios/NECore/PacketTunnelSharedStateStore.swift \
   tool/ios/LaunchPayloadTests.swift -o "$work/after"
 "$work/after"
+# Shared container mapping policy: expected group first, single renamed
+# authorized group mapped, ambiguous/none refused.
+swiftc -swift-version 5 \
+  ios/Shared/SharedLocation.swift \
+  tool/ios/SharedLocationTests.swift -o "$work/shared_location"
+"$work/shared_location"
+echo 'PASS shared container mapping regression'

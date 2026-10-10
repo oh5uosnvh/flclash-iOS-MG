@@ -1,4 +1,5 @@
 import Flutter
+import Shared
 import UIKit
 
 @main
@@ -7,6 +8,10 @@ import UIKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // Resolve and log the shared container before any plugin reads or
+    // writes state, mirroring the reference build's early compatibility
+    // loader position.
+    SharedLocation.logStartupDiagnostics()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

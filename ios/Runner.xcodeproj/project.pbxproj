@@ -15,6 +15,7 @@
 		059852AE2FF20A1200620D82 /* NECore.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 059852A42FF20A1200620D82 /* NECore.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		05A0DDAC2FFA466D00C9D0AA /* libShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 05A0DCD82FFA45A600C9D0AA /* libShared.a */; };
 		05A0DDAD2FFA467400C9D0AA /* libShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 05A0DCD82FFA45A600C9D0AA /* libShared.a */; };
+		05A0DDAE2FFA46A100C9D0AA /* libShared.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 05A0DCD82FFA45A600C9D0AA /* libShared.a */; };
 		05F01D332FF9245600136695 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 05F01D322FF9245600136695 /* WidgetKit.framework */; };
 		05F01D352FF9245600136695 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 05F01D342FF9245600136695 /* SwiftUI.framework */; };
 		05F01D422FF9245800136695 /* Widget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 05F01D312FF9245600136695 /* Widget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -207,6 +208,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				05A0DDAE2FFA46A100C9D0AA /* libShared.a in Frameworks */,
 				059852A62FF20A1200620D82 /* NetworkExtension.framework in Frameworks */,
 				7891A0092FF2A10100620D82 /* libclash_lowmem.a in Frameworks */,
 				7891A00A2FF2A10100620D82 /* libresolv.tbd in Frameworks */,
