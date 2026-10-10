@@ -170,7 +170,7 @@ enum SharedLocation {
       return nil
     }
     guard let raw = SecTaskCopyValueForEntitlement(
-      task, entitlementKey as CFString, kCFAllocatorDefault
+      task, entitlementKey as CFString, nil
     ) else {
       return nil
     }
