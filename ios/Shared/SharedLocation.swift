@@ -2,6 +2,21 @@ import Foundation
 import os
 import Security
 
+// SecTask entry points exist in Security.framework on iOS but are absent
+// from the SDK headers; declare them against CFTypeRef so no opaque type
+// from SecTask.h is needed. Both follow the Create/Copy +1 rule.
+@_silgen_name("SecTaskCreateFromSelf")
+private func _secTaskCreateFromSelf(
+  _ allocator: CFAllocator?
+) -> Unmanaged<AnyObject>?
+
+@_silgen_name("SecTaskCopyValueForEntitlement")
+private func _secTaskCopyValueForEntitlement(
+  _ task: AnyObject,
+  _ entitlement: CFString,
+  _ error: UnsafeMutablePointer<Unmanaged<CFError>?>?
+) -> Unmanaged<AnyObject>?
+
 /// Unified shared-container resolution for the main app, the network
 /// extension, and the widget — without changing entitlements.
 ///
@@ -165,16 +180,18 @@ enum SharedLocation {
   }
 
   private static func entitlementValue() -> Any? {
-    guard let task = SecTaskCreateFromSelf(kCFAllocatorDefault) else {
+    guard let task = _secTaskCreateFromSelf(kCFAllocatorDefault)?
+      .takeRetainedValue()
+    else {
       logger.error("SecTaskCreateFromSelf failed; cannot inspect groups")
       return nil
     }
-    guard let raw = SecTaskCopyValueForEntitlement(
+    guard let raw = _secTaskCopyValueForEntitlement(
       task, entitlementKey as CFString, nil
-    ) else {
+    )?.takeRetainedValue() else {
       return nil
     }
-    return raw as Any
+    return raw
   }
 
   static func defaultContainer(_ groupID: String) -> URL? {
