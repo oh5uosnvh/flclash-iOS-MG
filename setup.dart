@@ -567,9 +567,7 @@ Future<void> stageIOSGeoData(String rootDir) async {
     }
     await source.copy(p.join(targetDir.path, name));
   }
-  stdout.writeln(
-    'Staged ${names.length} offline GeoData resources for NECore',
-  );
+  stdout.writeln('Staged ${names.length} offline GeoData resources for NECore');
 }
 
 Future<int> packageIOSNoSign({
