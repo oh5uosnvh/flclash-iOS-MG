@@ -311,7 +311,8 @@ final class TunnelCoordinator {
         let hasGroup = FileManager.default.containerURL(
           forSecurityApplicationGroupIdentifier: group
         ) != nil
-        let yamlBytes = (payload?["configYaml"] as? String)?.utf8.count ?? 0
+        let yamlBytes = (payload?["configYaml"] as? String)?.utf8.count
+          ?? (payload?["configYamlSize"] as? Int) ?? 0
         log("launch os=\(ProcessInfo.processInfo.operatingSystemVersionString) app=\(bundle) provider=\(proto?.providerBundleIdentifier ?? "nil") appGroup=\(hasGroup) payloadVersion=\(payload?["launchPayloadVersion"] ?? NSNull()) yamlBytes=\(yamlBytes)")
         try manager.connection.startVPNTunnel(options: payload)
         log("start requested")

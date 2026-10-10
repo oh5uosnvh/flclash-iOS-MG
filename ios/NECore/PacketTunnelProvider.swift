@@ -267,10 +267,43 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       return
     }
 
+    // The Go dispatcher may never call back (core restarting or busy); the
+    // system then reports an empty response to the app. Answer exactly once,
+    // and add a watchdog so method calls fail with a defined error instead
+    // of vanishing.
+    let completionLock = NSLock()
+    var answered = false
+    let complete: (Data?) -> Void = { data in
+      completionLock.lock()
+      let isFirst = !answered
+      answered = true
+      completionLock.unlock()
+      guard isFirst else {
+        return
+      }
+      completionHandler(data)
+    }
+    let messageDataCopy = messageData
+    let watchdog = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.logger.warning(
+        "handleAppMessage watchdog fired; core did not answer"
+      )
+      complete(
+        self.methodErrorResponse(
+          messageData: messageDataCopy,
+          code: "core_timeout",
+          message: "core method did not answer"
+        )
+      )
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: watchdog)
+
     NECoreBridge.invokeMethod(messageData) { response in
+      watchdog.cancel()
       guard let response else {
         self.logger.warning("handleAppMessage empty core response")
-        completionHandler(
+        complete(
           self.methodErrorResponse(
             messageData: messageData,
             code: "empty_response",
@@ -282,7 +315,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       self.logger.debug(
         "handleAppMessage response bytes=\(response.count, privacy: .public)"
       )
-      completionHandler(response)
+      complete(response)
     }
   }
 

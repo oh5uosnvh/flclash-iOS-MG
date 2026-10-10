@@ -232,6 +232,9 @@ A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
+**Q: 魔改配置提示 configuration is too large / empty network extension response？**
+A: iOS 硬性限制 VPN 配置的 providerConfiguration 最大 524,288 字节，魔改订阅生成的 YAML（1MB+）直接塞载荷会被系统拒绝保存，隧道起不来，仪表盘方法调用全部报 empty response。处理：小配置（≤200KB）仍内联；更大时 App 端用 raw DEFLATE 压缩后放 `configYamlDeflate`（附 `configYamlSize` 原始长度），扩展端解码；压缩后仍超 430KB 预算则标记 `configOmitted` 并让启动报明确错误。另外 `handleAppMessage` 增加 15 秒看门狗：Go 核心不回话时返回 `core_timeout` 错误而不是静默无响应。门禁测试含压缩往返与扩展端解码用例。
+
 **Q: 本轮载荷修复覆盖什么？**
 A: 平铺启动字典、旧版嵌套 `launchPayload`、无 options 的系统/On Demand 启动、非法载荷回退，以及主 App 私有状态副本。`sh tool/ios/test_launch_payload.sh` 在 macOS 编译真实源码，先证明旧版失败，再验证新版。系统签名放行、首次 Geo 资源下载、无 App Group 的长期日志/运行状态同步仍需真机验证；不能把 CI 构建成功说成 iOS 自签实测通过。
 

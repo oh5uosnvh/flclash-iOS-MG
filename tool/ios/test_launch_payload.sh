@@ -18,6 +18,7 @@ echo 'PASS reproduced original flat-payload regression'
 # extension store, mirroring the target linking of libShared.a.
 swiftc -swift-version 5 -D PROVIDER_CONFIGURATION_FALLBACK \
   ios/Shared/SharedLocation.swift \
+  ios/Shared/PayloadCompression.swift \
   ios/NECore/PacketTunnelSharedStateStore.swift \
   tool/ios/LaunchPayloadTests.swift -o "$work/after"
 "$work/after"

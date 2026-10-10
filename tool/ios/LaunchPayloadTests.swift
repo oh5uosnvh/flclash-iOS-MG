@@ -43,6 +43,44 @@ struct LaunchPayloadTests {
     direct.attachLaunchPayload(nil, providerConfiguration: nil)
     check(!direct.launchPayloadAvailable(), "no stale payload after repeated start")
     #endif
+
+    // Compressed config payload: raw DEFLATE round-trip and the extension
+    // store's decode path (the 524,288-byte provider configuration limit).
+    let yamlText = "mixed-port: 7890\nproxies: []\n"
+    let yamlData = Data(yamlText.utf8)
+    if let deflated = PayloadCompression.deflate(yamlData) {
+      check(true, "deflate produced output")
+      check(
+        PayloadCompression.inflate(deflated, expectedSize: yamlData.count) == yamlData,
+        "inflate restores exact bytes"
+      )
+    } else {
+      check(false, "deflate produced output")
+    }
+    check(
+      PayloadCompression.inflate(Data([0x01, 0x02, 0x03]), expectedSize: 16) == nil,
+      "inflate rejects junk"
+    )
+    let repeated = Data(String(repeating: yamlText, count: 4000).utf8)
+    if let bigDeflated = PayloadCompression.deflate(repeated) {
+      check(
+        bigDeflated.count < repeated.count / 2,
+        "deflate shrinks repetitive YAML"
+      )
+      let restored = PacketTunnelSharedStateStore()
+      restored.attachLaunchPayload([
+        "launchPayloadVersion": 1,
+        "vpnOptions": vpn,
+        "configYamlDeflate": NSData(data: bigDeflated),
+        "configYamlSize": NSNumber(value: repeated.count),
+      ] as [String: NSObject])
+      check(
+        restored.configYamlDataFromPayload() == repeated,
+        "extension restores deflated config from payload"
+      )
+    } else {
+      check(false, "deflate shrinks repetitive YAML")
+    }
     if !failures.isEmpty {
       FileHandle.standardError.write(Data("Launch payload regressions: \(failures.joined(separator: ", "))\n".utf8))
       exit(1)

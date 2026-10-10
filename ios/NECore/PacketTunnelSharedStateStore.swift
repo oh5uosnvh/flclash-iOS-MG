@@ -151,8 +151,19 @@ final class PacketTunnelSharedStateStore {
   }
 
   func configYamlDataFromPayload() -> Data? {
-    guard let payload = launchPayload,
-      let configYaml = payload["configYaml"] as? String,
+    guard let payload = launchPayload else {
+      return nil
+    }
+    // Deflated entries carry the raw DEFLATE stream plus the original size
+    // (raw DEFLATE has no length trailer).
+    if let deflated = payload["configYamlDeflate"] as? Data,
+      let expectedSize = payload["configYamlSize"] as? Int,
+      let inflated = PayloadCompression.inflate(deflated, expectedSize: expectedSize),
+      !inflated.isEmpty
+    {
+      return inflated
+    }
+    guard let configYaml = payload["configYaml"] as? String,
       !configYaml.isEmpty
     else {
       return nil

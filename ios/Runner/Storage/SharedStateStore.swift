@@ -125,7 +125,13 @@ final class SharedStateStore {
     "asn": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb",
   ]
 
-  private let maxConfigYamlPayloadBytes = 4_000_000
+  // The system rejects saved provider configurations above 524,288 bytes
+  // ("The configuration is too large"). Magic-protocol subscriptions ship
+  // YAML of 1MB+; small configs stay inline, larger ones travel deflated,
+  // and anything beyond the budget is omitted so startup fails with a
+  // clear marker instead of a system save error.
+  private let configYamlInlineLimit = 200_000
+  private let configYamlDeflateBudget = 430_000
 
   func configYamlCandidateURLs() -> [URL] {
     var urls: [URL] = []
@@ -177,10 +183,18 @@ final class SharedStateStore {
     if let setupParams = shared[setupParamsKey], !(setupParams is NSNull) {
       payload["setupParams"] = setupParams
     }
-    if let configYaml = loadConfigYamlForLaunch(),
-      configYaml.utf8.count <= maxConfigYamlPayloadBytes
-    {
-      payload["configYaml"] = configYaml
+    if let configYaml = loadConfigYamlForLaunch() {
+      let raw = Data(configYaml.utf8)
+      if raw.count <= configYamlInlineLimit {
+        payload["configYaml"] = configYaml
+      } else if let deflated = PayloadCompression.deflate(raw),
+        deflated.count <= configYamlDeflateBudget
+      {
+        payload["configYamlDeflate"] = deflated
+        payload["configYamlSize"] = raw.count
+      } else {
+        payload["configOmitted"] = true
+      }
     }
     payload["geoURLs"] = geoDataURLs
     return payload
