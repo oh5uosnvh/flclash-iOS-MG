@@ -165,6 +165,28 @@ final class SharedStateStore {
     return nil
   }
 
+  private let configFingerprintKey = "lastConfigFingerprint"
+
+  /// FNV-1a 64 fingerprint of the config YAML the next launch payload would
+  /// carry. The extension home only receives config.yaml at tunnel start, so
+  /// a mismatch against the running session's fingerprint means the running
+  /// core is stale and the tunnel must restart to apply the config.
+  func currentConfigFingerprint() -> String? {
+    guard let configYaml = loadConfigYamlForLaunch() else {
+      return nil
+    }
+    return Self.fingerprint(of: Data(configYaml.utf8))
+  }
+
+  static func fingerprint(of data: Data) -> String {
+    var hash: UInt64 = 0xcbf2_6481_3641_3641
+    for byte in data {
+      hash ^= UInt64(byte)
+      hash = hash &* 0x0000_0100_0000_01b3
+    }
+    return String(hash, radix: 16)
+  }
+
   func makeLaunchPayload() -> [String: Any]? {
     guard
       let sharedData = savedSharedState(),

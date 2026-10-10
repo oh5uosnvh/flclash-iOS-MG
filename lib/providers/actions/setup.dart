@@ -500,6 +500,7 @@ class SetupAction extends _$SetupAction {
     if (!profileFailed && yamlMd5 == globalState.lastConfigMd5 && !force) {
       return _SetupTaskResult.completed;
     }
+    final configChanged = yamlMd5 != globalState.lastConfigMd5;
     if (system.isAndroid) {
       final sharedState = ref.read(sharedStateProvider);
       await preferences.saveShareState(sharedState);
@@ -531,6 +532,14 @@ class SetupAction extends _$SetupAction {
           rethrow;
         }
         globalState.lastConfigMd5 = yamlMd5;
+        if (configChanged && system.isIOS && ref.read(isStartProvider)) {
+          // The extension core only sees the config baked into its launch
+          // payload; a changed profile needs a tunnel restart so the new
+          // config.yaml lands in the extension home. Pushing setup params
+          // at the stale core would re-apply the previous config.
+          await _core.stopListener();
+          await _core.startListener();
+        }
         ref.read(checkIpNumProvider.notifier).add();
         await onUpdated?.call();
       },

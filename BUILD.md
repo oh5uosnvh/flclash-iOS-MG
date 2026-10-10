@@ -232,6 +232,9 @@ A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
+**Q: 切换配置后连的还是上一个配置的节点？**
+A: NE 核心的 config.yaml 只在隧道启动时由载荷写入，切换配置若只推送 setupConfig 会把旧配置重新 apply 一遍。现在三层防护：Dart 检测到配置变更且隧道在运行时直接重启隧道；Swift 协调器比对配置指纹（FNV-1a），会话期间配置变了强制 stop→save→start；路由器在指纹失配时拒绝对过期核心推送 setupConfig/updateConfig。另有 45 秒启动等待超时，避免 UI 永远停在加载。
+
 **Q: 魔改配置提示 configuration is too large / empty network extension response？**
 A: iOS 硬性限制 VPN 配置的 providerConfiguration 最大 524,288 字节，魔改订阅生成的 YAML（1MB+）直接塞载荷会被系统拒绝保存，隧道起不来，仪表盘方法调用全部报 empty response。处理：小配置（≤200KB）仍内联；更大时 App 端用 raw DEFLATE 压缩后放 `configYamlDeflate`（附 `configYamlSize` 原始长度），扩展端解码；压缩后仍超 430KB 预算则标记 `configOmitted` 并让启动报明确错误。另外 `handleAppMessage` 增加 15 秒看门狗：Go 核心不回话时返回 `core_timeout` 错误而不是静默无响应。门禁测试含压缩往返与扩展端解码用例。
 

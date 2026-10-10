@@ -99,6 +99,10 @@ final class TunnelController {
     try await coordinator.reloadOnDemandRules()
   }
 
+  var configChangedSinceSessionStart: Bool {
+    coordinator.configChangedSinceSessionStart
+  }
+
   func sendProviderMessage(_ data: Data) async throws -> String {
     let manager: NETunnelProviderManager?
     do {

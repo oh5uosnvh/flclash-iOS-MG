@@ -23,6 +23,10 @@ final class TunnelCoordinator {
   private var tunnelRequest: TunnelRequest?
   private var tunnelWait: TunnelWait?
   private var isCoordinatorRunning = false
+  private let runningConfigFingerprintKey = "runningConfigFingerprint"
+  private var runningConfigFingerprint: String? = UserDefaults.standard.string(
+    forKey: "runningConfigFingerprint"
+  )
 
   private var configurationContinuations: [CheckedContinuation<Void, Error>] = []
   private var needsStatusRefresh = false
@@ -93,6 +97,18 @@ final class TunnelCoordinator {
     statusRefreshShouldNotify =
       statusRefreshShouldNotify || notifyExternal
     driveCoordinator()
+  }
+
+  /// True while a session is active whose core was started from a payload
+  /// with a different config than the current one; the running extension
+  /// core is stale and must be restarted to pick the config up.
+  var configChangedSinceSessionStart: Bool {
+    guard let current = managerStore.currentConfigFingerprint(),
+      let running = runningConfigFingerprint
+    else {
+      return false
+    }
+    return current != running
   }
 
   func publishConnectionState() {
@@ -241,6 +257,39 @@ final class TunnelCoordinator {
 
       let status = manager.connection.status
       recordObservedTunnelStatus(status, notifyExternal: false)
+
+      // The extension home only receives config.yaml at tunnel start; a
+      // config change while a session is active means the running core is
+      // stale. Restart once instead of re-applying the old config.
+      if !request.forceRestartUsed,
+        status == .connected || status == .connecting
+          || status == .reasserting,
+        let current = managerStore.currentConfigFingerprint(),
+        let running = runningConfigFingerprint,
+        current != running
+      {
+        request.forceRestartUsed = true
+        log(
+          "config changed since session start; restarting tunnel (\(running) -> \(current))"
+        )
+        if status != .disconnecting {
+          manager.connection.stopVPNTunnel()
+          log("stop requested for config change")
+        }
+        let stopResult = await waitForTunnelStatus(
+          manager: manager,
+          request: request,
+          purpose: .stopping
+        )
+        guard isCurrent(request) else {
+          return
+        }
+        if case .superseded = stopResult {
+          return
+        }
+        continue
+      }
+
       if status.tunnelState == .running {
         finishTunnelRequest(request, actualState: .running)
         return
@@ -333,6 +382,12 @@ final class TunnelCoordinator {
       }
       switch result {
       case .status(let status):
+        if status.tunnelState == nil {
+          // The start wait timed out without reaching a running or terminal
+          // state; unstick instead of holding the UI in pending forever.
+          finishTunnelRequest(request, actualState: .stopped)
+          return
+        }
         finishTunnelRequest(
           request,
           actualState: status.tunnelState
@@ -427,6 +482,25 @@ final class TunnelCoordinator {
         continuation: continuation
       )
       tunnelWait = wait
+      if purpose == .starting {
+        // A start that never reaches a running or terminal state must not
+        // hold the UI pending forever; stop the half-started tunnel and
+        // resolve with the observed status.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
+          guard let self,
+            self.tunnelWait === wait,
+            self.isCurrent(request)
+          else {
+            return
+          }
+          self.log("start wait timed out; stopping half-started tunnel")
+          wait.manager.connection.stopVPNTunnel()
+          self.resolveTunnelWait(
+            wait,
+            result: .status(wait.manager.connection.status)
+          )
+        }
+      }
       consumeWaitStatus(manager.connection.status)
     }
   }
@@ -500,6 +574,20 @@ final class TunnelCoordinator {
     }
     tunnelRequest = nil
     defer { publishConnectionState() }
+    if actualState == .running {
+      let fingerprint = managerStore.currentConfigFingerprint()
+      runningConfigFingerprint = fingerprint
+      if let fingerprint {
+        UserDefaults.standard.set(
+          fingerprint,
+          forKey: runningConfigFingerprintKey
+        )
+      } else {
+        UserDefaults.standard.removeObject(
+          forKey: runningConfigFingerprintKey
+        )
+      }
+    }
     guard let actualState else {
       log(
         "\(request.target.description) completed actual=unknown generation=\(request.generation)"

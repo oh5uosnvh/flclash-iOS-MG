@@ -238,6 +238,17 @@ final class CoreMessageRouter {
     }
 
     let appResponse = try await sendCoreMessage(appData, route: .app)
+    if networkExtensionActive,
+      tunnelController.configChangedSinceSessionStart
+    {
+      // The running extension core still holds the previous config; pushing
+      // setup/update params would re-apply that stale config. The tunnel
+      // restart carries the new config.yaml into the extension home instead.
+      log(
+        "config changed since session start; skip network extension config push"
+      )
+      return appResponse
+    }
     guard networkExtensionActive,
       currentRoute == .networkExtension,
       methodResponseHasEmptyStringResult(appResponse)

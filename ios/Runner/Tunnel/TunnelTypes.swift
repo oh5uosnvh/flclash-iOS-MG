@@ -42,6 +42,7 @@ final class TunnelRequest {
   let generation: UInt64
   let target: TunnelTarget
   var preferenceRetryCount = 0
+  var forceRestartUsed = false
 
   init(
     generation: UInt64,

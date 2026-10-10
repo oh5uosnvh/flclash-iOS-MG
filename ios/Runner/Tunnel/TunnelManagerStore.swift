@@ -54,6 +54,10 @@ final class TunnelManagerStore {
     self.localizedDescription = localizedDescription
   }
 
+  func currentConfigFingerprint() -> String? {
+    sharedStateStore.currentConfigFingerprint()
+  }
+
   func loadManager(
     createIfNeeded: Bool = true
   ) async throws -> NETunnelProviderManager? {
