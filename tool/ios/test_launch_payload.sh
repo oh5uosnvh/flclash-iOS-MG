@@ -16,7 +16,7 @@ grep -q '^FAIL flat app start options$' "$work/before.log"
 echo 'PASS reproduced original flat-payload regression'
 # The after-build compiles the real SharedLocation source alongside the
 # extension store, mirroring the target linking of libShared.a.
-swiftc -swift-version 5 -D PROVIDER_CONFIGURATION_FALLBACK \
+swiftc -swift-version 5 -D PROVIDER_CONFIGURATION_FALLBACK -D PAYLOAD_COMPRESSION \
   ios/Shared/SharedLocation.swift \
   ios/Shared/PayloadCompression.swift \
   ios/NECore/PacketTunnelSharedStateStore.swift \

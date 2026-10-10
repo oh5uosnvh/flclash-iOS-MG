@@ -46,6 +46,9 @@ struct LaunchPayloadTests {
 
     // Compressed config payload: raw DEFLATE round-trip and the extension
     // store's decode path (the 524,288-byte provider configuration limit).
+    // Only compiled into the after-build; the negative control has no
+    // PayloadCompression module.
+    #if PAYLOAD_COMPRESSION
     let yamlText = "mixed-port: 7890\nproxies: []\n"
     let yamlData = Data(yamlText.utf8)
     if let deflated = PayloadCompression.deflate(yamlData) {
@@ -69,8 +72,8 @@ struct LaunchPayloadTests {
       )
       let restored = PacketTunnelSharedStateStore()
       restored.attachLaunchPayload([
-        "launchPayloadVersion": 1,
-        "vpnOptions": vpn,
+        "launchPayloadVersion": NSNumber(value: 1),
+        "vpnOptions": vpn as NSDictionary,
         "configYamlDeflate": NSData(data: bigDeflated),
         "configYamlSize": NSNumber(value: repeated.count),
       ] as [String: NSObject])
@@ -81,6 +84,7 @@ struct LaunchPayloadTests {
     } else {
       check(false, "deflate shrinks repetitive YAML")
     }
+    #endif
     if !failures.isEmpty {
       FileHandle.standardError.write(Data("Launch payload regressions: \(failures.joined(separator: ", "))\n".utf8))
       exit(1)
