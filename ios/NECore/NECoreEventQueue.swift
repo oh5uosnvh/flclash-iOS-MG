@@ -10,6 +10,13 @@ final class NECoreEventQueue {
     category: "NECoreEventQueue"
   )
 
+  // Restricted-signing environments have no shared container; events then
+  // wait in this bounded ring until the app drains them over a provider
+  // message instead of being lost.
+  private var memoryEventRing: [Data] = []
+  private let memoryRingLock = NSLock()
+  private let maxMemoryEventRing = 300
+
   private var eventsSincePrune = 0
 
   init(sharedStateStore: PacketTunnelSharedStateStore) {
@@ -34,7 +41,11 @@ final class NECoreEventQueue {
 
   private func enqueue(_ event: Data) {
     guard let directory = eventQueueDirectory() else {
-      logger.error("enqueue failed: missing app group dir")
+      // No shared container: the app drains these over provider messages.
+      // The Darwin notification still crosses processes and makes the app
+      // poll immediately instead of waiting for its 1s timer.
+      enqueueToMemoryRing(event)
+      notifyEventAvailable()
       return
     }
     do {
@@ -102,6 +113,25 @@ final class NECoreEventQueue {
         "prune failed: \(error.localizedDescription, privacy: .public)"
       )
     }
+  }
+
+  private func enqueueToMemoryRing(_ event: Data) {
+    memoryRingLock.lock()
+    memoryEventRing.append(event)
+    if memoryEventRing.count > maxMemoryEventRing {
+      memoryEventRing.removeFirst(memoryEventRing.count - maxMemoryEventRing)
+    }
+    memoryRingLock.unlock()
+  }
+
+  /// Returns and clears the events buffered while no shared container was
+  /// available. Called by the native provider-message handler.
+  func drainMemoryEvents() -> [Data] {
+    memoryRingLock.lock()
+    defer { memoryRingLock.unlock() }
+    let events = memoryEventRing
+    memoryEventRing.removeAll()
+    return events
   }
 
   private func eventQueueDirectory() -> URL? {

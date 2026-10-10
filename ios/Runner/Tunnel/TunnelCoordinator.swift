@@ -495,6 +495,19 @@ final class TunnelCoordinator {
       )
       tunnelWait = wait
       if purpose == .starting {
+        // Pull the extension flight log while the start is still in
+        // progress: a hung phase (payload, geo, quickSetup, startTun)
+        // shows up in the app log without waiting for success.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+          guard let self,
+            self.tunnelWait === wait,
+            self.isCurrent(request)
+          else {
+            return
+          }
+          self.log("start still in progress; pulling extension flight log")
+          self.scheduleDiagnosticsFetch(delay: 0)
+        }
         // A start that never reaches a running or terminal state must not
         // hold the UI pending forever; stop the half-started tunnel and
         // resolve with the observed status.
@@ -644,7 +657,7 @@ final class TunnelCoordinator {
   /// Pulls the extension-side flight log over a provider message a few
   /// seconds after a session starts (long enough to capture the whole
   /// startup timeline) and merges it into the app-side diagnostic log.
-  private func scheduleDiagnosticsFetch() {
+  private func scheduleDiagnosticsFetch(delay seconds: TimeInterval = 12) {
     Task { @MainActor [weak self] in
       guard let self else { return }
       try? await Task.sleep(nanoseconds: 12_000_000_000)
@@ -658,7 +671,8 @@ final class TunnelCoordinator {
         let manager = try await managerStore.loadManager(
           createIfNeeded: false
         ),
-        manager.connection.status.tunnelState == .running,
+        manager.connection.status == .connecting
+          || manager.connection.status.tunnelState == .running,
         let session = manager.connection as? NETunnelProviderSession
       else {
         return

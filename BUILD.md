@@ -235,6 +235,12 @@ A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bund
 **Q: 带 rule-providers 的配置（x365/黑石/fastup 等）启动要 10+ 秒？**
 A: 内核 `loadProvider` 的低内存构建（iOS NE 是 `with_low_memory`）里 `concurrentCount = 1`，而信号量获取写在了主循环里：上一个 provider 加载不完（含网络超时）就轮不到下一个，整个 applyConfig 被 rule-providers 串行阻塞——`raw.githubusercontent.com` 类规则源在国内直连必超时（20s 上限）且永远无缓存，每次启动都重新等。修复：信号量获取移入 goroutine，spawn 循环瞬间返回，隧道立即启动；provider 仍按 lowmem 限速在后台逐个加载，规则异步热身。参考包内核是同一段代码，但其 App Group 让 provider 缓存从不缺失，所以从未触发。
 
+**Q: 自签（无 App Group）下网速卡片/日志/连接面板没数据？**
+A: NE 的核心事件原本只能写 App Group 目录（`core-events`），无组时全部丢失。现在 NE 维护 300 条内存环，App 在隧道运行期每秒（及收到 Darwin 通知时）通过 provider 消息 `neDrainEvents` 抽取并转发给 Flutter；巨魔等有组环境仍走原文件队列，两条通道互不干扰。
+
+**Q: VPN 卡在 connecting 怎么定位？**
+A: 启动等待 8 秒仍未完成时，协调器自动通过 provider 消息拉取 NE 飞行日志（`neDiagnosticLog`，含 payload/geo/quickSetup/startTun 每阶段毫秒时间戳）并注入 `[VPN-DIAG]`/`[NE]` 日志行；45 秒仍无果则主动停止半启动隧道。卡在哪一阶段，导出日志直接可见。
+
 **Q: 重启期间 DNS 报 "listen udp 0.0.0.0:1053: bind: address already in use"？**
 A: 重签环境的 NE 重启有进程重叠窗口，旧进程还占着 DNS/inbound 端口时新核心会 bind 失败（对整个会话致命）。修复在内核侧（对齐参考包能力）：`core/mihomo/adapter/inbound/listen.go` 的 Control 在 bind 前统一设置 SO_REUSEADDR+SO_REUSEPORT，新旧进程可同时持有端口，冲突消失。
 

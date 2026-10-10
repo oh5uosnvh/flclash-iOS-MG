@@ -9,6 +9,11 @@ private final class CoreMessageRouterReference {
 }
 
 @MainActor
+private final class CoreEventRelayReference {
+  weak var value: CoreEventRelay?
+}
+
+@MainActor
 final class ServiceChannel {
   private static var instance: ServiceChannel?
   private static var pendingShortcutToggle = false
@@ -54,10 +59,12 @@ final class ServiceChannel {
     )
     let sharedStateStore = SharedStateStore()
     let routerReference = CoreMessageRouterReference()
+    let coreEventRelayReference = CoreEventRelayReference()
     let tunnelController = TunnelController(
       sharedStateStore: sharedStateStore,
       onTunnelStateChanged: { state in
         routerReference.value?.updateTunnelState(state)
+        coreEventRelayReference.value?.setTunnelActive(state == .running)
       },
       onConnectionStateChanged: { state in
         channel.invokeMethod("tunnelState", arguments: state)
@@ -100,8 +107,12 @@ final class ServiceChannel {
         channel.invokeMethod("event", arguments: event) { callbackResult in
           completion(callbackResult == nil)
         }
+      },
+      sendProviderMessage: { request in
+        try await tunnelController.sendProviderMessage(request)
       }
     )
+    coreEventRelayReference.value = coreEventRelay
 
     self.channel = channel
     self.tileChannel = tileChannel

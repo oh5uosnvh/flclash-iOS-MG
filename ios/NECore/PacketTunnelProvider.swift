@@ -331,14 +331,22 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     guard
       let object = try? JSONSerialization.jsonObject(with: messageData)
         as? [String: Any],
-      object["method"] as? String == "neDiagnosticLog"
+      let method = object["method"] as? String
     else {
       return nil
     }
-    var payload: [String: Any] = [
-      "result": FlightRecorder.shared.snapshot(),
-      "error": NSNull(),
-    ]
+    var payload: [String: Any] = [:]
+    switch method {
+    case "neDiagnosticLog":
+      payload["result"] = FlightRecorder.shared.snapshot()
+    case "neDrainEvents":
+      payload["result"] = eventQueue.drainMemoryEvents().map { event in
+        String(data: event, encoding: .utf8) ?? ""
+      }
+    default:
+      return nil
+    }
+    payload["error"] = NSNull()
     if let id = object["id"] {
       payload["id"] = id
     }
