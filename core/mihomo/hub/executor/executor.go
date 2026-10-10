@@ -357,8 +357,14 @@ func loadProvider[T P.Provider](providers map[string]T) {
 	for _, pv := range providers {
 		pv := pv
 		wg.Add(1)
-		ch <- struct{}{}
+		// Acquire the slot inside the goroutine: with concurrentCount=1
+		// (low-memory builds) a blocking send in this loop serialised the
+		// whole applyConfig behind every provider fetch, including ones
+		// stuck on their network timeout. The tunnel must not wait for
+		// rule/proxy providers; they load concurrently in the background
+		// with the same memory limit.
 		go func() {
+			ch <- struct{}{}
 			defer func() { <-ch; wg.Done() }()
 			load(pv)
 		}()

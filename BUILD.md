@@ -232,6 +232,9 @@ A: 先看 `[VPN-DIAG] launch` 和 `lastDisconnectError` 的 domain/code。系统
 **Q: 重签后共享容器/组名变化怎么处理？**
 A: `ios/Shared/SharedLocation.swift` 统一解析：优先逻辑组 `group.<bundle id>`；不可用时在授权组（SecTask 读取）中找唯一可打开容器的组并映射过去；多于一个可用组时拒绝猜测，回落到启动载荷/沙盒链路。主 App（`SharedStateStore`）、NE（`PacketTunnelSharedStateStore`）、Widget、Dart 数据目录（`path.dart` 经 `getAppGroupPath` 通道）四处共用同一决策，不允许出现 App 与扩展各用各的根目录。Dart 侧通道未就绪时回退到 path_provider 的逻辑组查询。
 
+**Q: 带 rule-providers 的配置（x365/黑石/fastup 等）启动要 10+ 秒？**
+A: 内核 `loadProvider` 的低内存构建（iOS NE 是 `with_low_memory`）里 `concurrentCount = 1`，而信号量获取写在了主循环里：上一个 provider 加载不完（含网络超时）就轮不到下一个，整个 applyConfig 被 rule-providers 串行阻塞——`raw.githubusercontent.com` 类规则源在国内直连必超时（20s 上限）且永远无缓存，每次启动都重新等。修复：信号量获取移入 goroutine，spawn 循环瞬间返回，隧道立即启动；provider 仍按 lowmem 限速在后台逐个加载，规则异步热身。参考包内核是同一段代码，但其 App Group 让 provider 缓存从不缺失，所以从未触发。
+
 **Q: 重启期间 DNS 报 "listen udp 0.0.0.0:1053: bind: address already in use"？**
 A: 重签环境的 NE 重启有进程重叠窗口，旧进程还占着 DNS/inbound 端口时新核心会 bind 失败（对整个会话致命）。修复在内核侧（对齐参考包能力）：`core/mihomo/adapter/inbound/listen.go` 的 Control 在 bind 前统一设置 SO_REUSEADDR+SO_REUSEPORT，新旧进程可同时持有端口，冲突消失。
 
