@@ -135,7 +135,9 @@ final class TunnelController {
     }
 
     // One retry on a nil response: during restarts the system can drop a
-    // provider message even though the session still reports running.
+    // provider message even though the session still reports running. Each
+    // attempt is timeout-raced: a hung extension must not park the caller
+    // (or the event poll) forever.
     let emptyResponseError = ProviderMessageError(
       code: "empty_response",
       message: "empty network extension response"
@@ -143,17 +145,27 @@ final class TunnelController {
     for attempt in 0...1 {
       let response: Data? = try await withCheckedThrowingContinuation {
         continuation in
+        let state = NSLock()
+        var resumed = false
+        func resumeOnce(_ result: Result<Data?, Error>) {
+          state.lock()
+          let isFirst = !resumed
+          resumed = true
+          state.unlock()
+          guard isFirst else {
+            return
+          }
+          continuation.resume(with: result)
+        }
         do {
           try session.sendProviderMessage(data) { response in
-            continuation.resume(returning: response)
+            resumeOnce(.success(response))
           }
         } catch {
-          continuation.resume(
-            throwing: ProviderMessageError(
-              code: "network_extension_error",
-              message: error.localizedDescription
-            )
-          )
+          resumeOnce(.failure(error))
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 12) {
+          resumeOnce(.success(nil))
         }
       }
       if let response,

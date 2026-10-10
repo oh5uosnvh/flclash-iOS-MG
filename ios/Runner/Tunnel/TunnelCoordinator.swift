@@ -682,12 +682,27 @@ final class TunnelCoordinator {
       )
       let response: Data? = try await withCheckedThrowingContinuation {
         continuation in
+        let state = NSLock()
+        var resumed = false
+        func resumeOnce(_ result: Result<Data?, Error>) {
+          state.lock()
+          let isFirst = !resumed
+          resumed = true
+          state.unlock()
+          guard isFirst else {
+            return
+          }
+          continuation.resume(with: result)
+        }
         do {
           try session.sendProviderMessage(request) { response in
-            continuation.resume(returning: response)
+            resumeOnce(.success(response))
           }
         } catch {
-          continuation.resume(throwing: error)
+          resumeOnce(.failure(error))
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+          resumeOnce(.success(nil))
         }
       }
       guard let response,

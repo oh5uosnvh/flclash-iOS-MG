@@ -20,6 +20,15 @@ class FlClashHttpOverrides extends HttpOverrides {
     if ([localhost].contains(url.host)) {
       return 'DIRECT';
     }
+    // iOS network-extension mode: the system tunnel claims the device
+    // traffic at the IP layer, and the core never binds the mixed-port
+    // listener inside the extension (updateListeners is disabled and the
+    // app-core listener start is handled by the service). A localhost
+    // proxy target would be a dead port, so the app always connects
+    // directly and lets the tunnel proxy it.
+    if (system.isIOS) {
+      return 'DIRECT';
+    }
     final isStart = read(isStartProvider);
     final suspend = system.isIOS ? false : read(suspendProvider);
     commonPrint.log('find $url proxy: $isStart');
